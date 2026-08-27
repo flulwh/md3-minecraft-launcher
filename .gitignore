@@ -1,0 +1,45 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+dist/
+dist-electron/
+*.tsbuildinfo
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Backend
+backend/data/
+backend/instances/
+backend/*.db
+backend/*.db-journal
+backend/.env
+
+# Frontend caches
+frontend/.vite/
+frontend/.cache/
+
+# Temp
+tmp/
+temp/

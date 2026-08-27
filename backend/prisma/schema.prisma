@@ -1,0 +1,106 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Account {
+  id                  String             @id @default(cuid())
+  /// offline | yggdrasil
+  type                String
+  /// offline player name or yggdrasil profile name
+  username            String             @unique
+  /// encrypted yggdrasil access token
+  accessToken         String?
+  /// encrypted yggdrasil client token
+  clientToken         String?
+  accessTokenExpiresAt DateTime?
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+  profiles            MinecraftProfile[]
+  sessions            LaunchSession[]
+}
+
+model MinecraftProfile {
+  id          String   @id
+  name        String
+  accountId   String
+  isActive    Boolean  @default(false)
+  skins       String?
+  capes       String?
+  account     Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  @@unique([accountId, name])
+}
+
+model Instance {
+  id               String          @id @default(cuid())
+  name             String
+  minecraftVersion String
+  /// vanilla | fabric | forge | neoforge | quilt
+  loader           String          @default("vanilla")
+  loaderVersion    String?
+  javaPath         String?
+  memoryMinMb      Int?
+  memoryMaxMb      Int             @default(2048)
+  /// extra JVM args, JSON array of strings
+  jvmArgs          String?
+  /// extra game variables, JSON object Record<string,string>
+  gameArgs         String?
+  width            Int?
+  height           Int?
+  fullscreen       Boolean         @default(false)
+  serverIp         String?
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+  sessions         LaunchSession[]
+}
+
+model JavaRuntimeRecord {
+  id             String   @id @default(cuid())
+  path           String   @unique
+  majorVersion   Int
+  architecture   String
+  vendor         String?
+  versionString  String?
+  /// system | managed | explicit
+  source         String   @default("system")
+  lastVerifiedAt DateTime @default(now())
+}
+
+model DownloadTaskRecord {
+  id          String    @id
+  kind        String
+  url         String
+  targetPath  String
+  status      String
+  bytesTotal  Int?
+  bytesDone   Int       @default(0)
+  error       String?
+  createdAt   DateTime  @default(now())
+  finishedAt  DateTime?
+}
+
+model LaunchSession {
+  id           String    @id @default(cuid())
+  instanceId   String
+  accountId    String?
+  pid          Int?
+  /// starting | running | stopping | stopped | crashed
+  status       String    @default("starting")
+  commandJson  String?
+  startedAt    DateTime  @default(now())
+  endedAt      DateTime?
+  exitCode     Int?
+  crashReason  String?
+  instance     Instance  @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+  account      Account?  @relation(fields: [accountId], references: [id], onDelete: SetNull)
+}
+
+model Setting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}
