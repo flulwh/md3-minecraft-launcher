@@ -7,8 +7,13 @@ export function sha1Hex(data: crypto.BinaryLike): string {
 }
 
 export async function sha1File(filePath: string): Promise<string> {
+  return hashFile(filePath, "sha1");
+}
+
+/** Computes `algorithm` (e.g. sha1 | sha512) of a file. */
+export async function hashFile(filePath: string, algorithm = "sha1"): Promise<string> {
   return new Promise((resolve, reject) => {
-    const hash = crypto.createHash("sha1");
+    const hash = crypto.createHash(algorithm);
     const stream = fs.createReadStream(filePath);
     stream.on("error", reject);
     stream.on("data", (chunk) => hash.update(chunk));
