@@ -16,7 +16,8 @@ import { DownloadTaskRow } from "../components/DownloadTaskRow";
 import { installStore } from "../stores/installStore";
 import { useDownloads, useInstances } from "../hooks/queries";
 import { fmtBytes, fmtSpeed } from "../lib/format";
-import type { InstallationSnapshot, InstanceDto, InstallPhase } from "../api/types";
+import { INSTALL_LIVE_PHASES, INSTALL_PHASE_LABEL, installPhaseColor } from "../lib/installPhase";
+import type { InstallationSnapshot, InstanceDto } from "../api/types";
 
 type StatusFilter = "all" | "downloading" | "paused" | "completed" | "failed";
 
@@ -186,31 +187,6 @@ function StatCard({ icon, label, value }: { icon: string; label: string; value: 
   );
 }
 
-const LIVE_PHASES: InstallPhase[] = [
-  "CREATED",
-  "ANALYZING",
-  "PLANNING",
-  "PREPARING",
-  "DOWNLOADING",
-  "INSTALLING",
-  "FINALIZING",
-  "PAUSED",
-  "RETRYING",
-  "CANCELLING",
-];
-
-const INSTALL_PHASE_LABEL: Record<string, string> = {
-  ANALYZING: "分析版本",
-  PLANNING: "生成计划",
-  PREPARING: "准备加载器",
-  DOWNLOADING: "下载中",
-  INSTALLING: "安装中",
-  FINALIZING: "收尾",
-  PAUSED: "已暂停",
-  RETRYING: "重试中",
-  CANCELLING: "取消中",
-};
-
 /** "下载中心" 正在安装的实例（聚合 install.progress 事件） */
 function ActiveInstalls({
   installs,
@@ -221,7 +197,7 @@ function ActiveInstalls({
   instances: InstanceDto[];
   navigate: (to: string) => void;
 }) {
-  const live = Object.values(installs).filter((s) => LIVE_PHASES.includes(s.phase));
+  const live = Object.values(installs).filter((s) => INSTALL_LIVE_PHASES.includes(s.phase));
   if (live.length === 0) return null;
 
   return (
@@ -253,7 +229,7 @@ function ActiveInstalls({
                   </Box>
                 </Typography>
               </Box>
-              <Chip size="small" label={INSTALL_PHASE_LABEL[s.phase] ?? s.phase} color={s.phase === "PAUSED" ? "warning" : s.phase === "CANCELLING" ? "default" : "info"} />
+              <Chip size="small" label={INSTALL_PHASE_LABEL[s.phase]} color={installPhaseColor(s.phase)} />
             </Box>
             {determinate ? (
               <LinearProgress variant="determinate" value={s.progressPct} sx={{ mb: 1 }} />

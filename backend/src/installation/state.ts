@@ -2,8 +2,12 @@
  * Installation state machine (design doc §3).
  *
  * The public phases follow:
- *   CREATED -> ANALYZING -> PLANNING -> PREPARING -> DOWNLOADING
+ *   CREATED -> ANALYZING -> PREPARING -> PLANNING -> DOWNLOADING
  *          -> INSTALLING -> FINALIZING -> READY
+ *
+ * PREPARING (loader build) runs BEFORE PLANNING because the loader's generated
+ * version JSON is required to resolve the version id and enumerate the install
+ * plan's tasks. Vanilla instances skip PREPARING and go ANALYZING -> PLANNING.
  *
  * With non-terminal branches for interactivity:
  *   DOWNLOADING -> PAUSED <-> DOWNLOADING
@@ -74,18 +78,22 @@ export function instanceStatusForPhase(phase: InstallPhase): InstanceStatus {
 
 const ALLOWED: Record<InstallPhase, InstallPhase[]> = {
   CREATED: ["ANALYZING", "FAILED", "CANCELLED"],
-  ANALYZING: ["PLANNING", "FAILED", "CANCELLED"],
-  PLANNING: ["PREPARING", "FAILED", "CANCELLED"],
-  PREPARING: ["DOWNLOADING", "FAILED", "CANCELLED"],
-  DOWNLOADING: ["INSTALLING", "PAUSED", "RETRYING", "FAILED", "CANCELLED"],
-  INSTALLING: ["FINALIZING", "FAILED", "CANCELLED"],
-  FINALIZING: ["READY", "FAILED", "CANCELLED"],
+  // Loader build (PREPARING) precedes plan generation (PLANNING): the loader's
+  // generated version JSON is required to resolve the version id / enumerate the
+  // plan's tasks. Vanilla instances go ANALYZING -> PLANNING directly.
+  ANALYZING: ["PLANNING", "PREPARING", "CANCELLING", "FAILED", "CANCELLED"],
+  PLANNING: ["PREPARING", "DOWNLOADING", "CANCELLING", "FAILED", "CANCELLED"],
+  PREPARING: ["PLANNING", "DOWNLOADING", "CANCELLING", "FAILED", "CANCELLED"],
+  DOWNLOADING: ["INSTALLING", "PAUSED", "RETRYING", "CANCELLING", "FAILED", "CANCELLED"],
+  INSTALLING: ["FINALIZING", "PAUSED", "CANCELLING", "FAILED", "CANCELLED"],
+  FINALIZING: ["READY", "CANCELLING", "FAILED", "CANCELLED"],
   READY: [],
   // PAUSED can resume into any subsequent phase — not just DOWNLOADING — because
   // a pause may be captured between phases or even during loader build in
-  // PREPARING. Any of these remains a valid continuation of the same install.
-  PAUSED: ["DOWNLOADING", "INSTALLING", "FINALIZING", "PREPARING", "CANCELLING", "CANCELLED", "FAILED"],
-  RETRYING: ["DOWNLOADING", "FAILED", "CANCELLED"],
+  // PREPARING. run() re-enters at ANALYZING, so resuming must allow the full
+  // ANALYZING -> PREPARING -> PLANNING chain as well.
+  PAUSED: ["ANALYZING", "PLANNING", "PREPARING", "DOWNLOADING", "INSTALLING", "FINALIZING", "CANCELLING", "CANCELLED", "FAILED"],
+  RETRYING: ["DOWNLOADING", "CANCELLING", "FAILED", "CANCELLED"],
   CANCELLING: ["CANCELLED", "FAILED"],
   CANCELLED: [],
   FAILED: [],

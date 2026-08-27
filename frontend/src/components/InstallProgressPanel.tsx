@@ -14,24 +14,9 @@ import { installStore } from "../stores/installStore";
 import { useInstall, useInstallControl, useInstance } from "../hooks/queries";
 import { AppIcon } from "../design-system/AppIcon";
 import { fmtBytes, fmtEta, fmtSpeed } from "../lib/format";
+import { INSTALL_PHASE_LABEL, INSTALL_TERMINAL_PHASES } from "../lib/installPhase";
 import type { InstallPhase } from "../api/types";
 import { toast } from "../stores/toastStore";
-
-const PHASE_LABEL: Record<InstallPhase, string> = {
-  CREATED: "等待中",
-  ANALYZING: "分析版本",
-  PLANNING: "生成安装计划",
-  PREPARING: "准备加载器",
-  DOWNLOADING: "下载文件",
-  INSTALLING: "安装内容",
-  FINALIZING: "校验收尾",
-  READY: "已就绪",
-  PAUSED: "已暂停",
-  RETRYING: "重试中",
-  CANCELLING: "取消中",
-  CANCELLED: "已取消",
-  FAILED: "失败",
-};
 
 const RUNNING_PHASES: InstallPhase[] = [
   "ANALYZING",
@@ -50,8 +35,6 @@ const CANCELABLE_PHASES: InstallPhase[] = [
   ...RUNNING_PHASES,
   "PAUSED",
 ];
-
-const TERMINAL_PHASES: InstallPhase[] = ["READY", "FAILED", "CANCELLED"];
 
 export function InstallProgressPanel({ instanceId }: { instanceId: string }) {
   const snap = installStore((s) => s.active[instanceId]);
@@ -138,7 +121,7 @@ export function InstallProgressPanel({ instanceId }: { instanceId: string }) {
         )}
         <Box sx={{ flex: 1, minWidth: 0 }}>
           <Typography variant="body2" sx={{ fontWeight: 600 }}>
-            {PHASE_LABEL[snap.phase]}
+            {INSTALL_PHASE_LABEL[snap.phase]}
           </Typography>
           {snap.message ? (
             <Typography variant="caption" sx={{ color: "text.secondary" }}>
@@ -184,7 +167,7 @@ export function InstallProgressPanel({ instanceId }: { instanceId: string }) {
             暂停
           </Button>
         )}
-        {CANCELABLE_PHASES.includes(snap.phase) && !TERMINAL_PHASES.includes(snap.phase) && (
+        {CANCELABLE_PHASES.includes(snap.phase) && !INSTALL_TERMINAL_PHASES.includes(snap.phase) && (
           <Button size="small" color="error" startIcon={<AppIcon name="close" size={16} />} onClick={() => setConfirmCancel(true)}>
             取消
           </Button>
