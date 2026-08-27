@@ -75,4 +75,5 @@ export const updateSettingsSchema = z.object({
   defaultMemoryMaxMb: z.number().int().min(256).max(65536).optional(),
   preferredJavaPath: z.string().max(512).nullable().optional(),
   extraJvmArgs: z.array(z.string().max(1024)).max(128).optional(),
+  mirrorMode: z.enum(["auto", "official", "bmclapi"]).optional(),
 });

@@ -3,10 +3,12 @@ import Button from "@mui/material/Button";
 import Card from "@mui/material/Card";
 import Chip from "@mui/material/Chip";
 import CircularProgress from "@mui/material/CircularProgress";
+import FormControl from "@mui/material/FormControl";
 import IconButton from "@mui/material/IconButton";
 import List from "@mui/material/List";
 import ListItemButton from "@mui/material/ListItemButton";
 import ListItemIcon from "@mui/material/ListItemIcon";
+import MenuItem from "@mui/material/MenuItem";
 import Slider from "@mui/material/Slider";
 import Stack from "@mui/material/Stack";
 import TextField from "@mui/material/TextField";
@@ -17,10 +19,11 @@ import { useEffect, useState } from "react";
 import { AppIcon } from "../design-system/AppIcon";
 import { FormRow } from "../design-system/FormRow";
 import { PageHeader } from "../design-system/PageHeader";
-import { useJavaRuntimes, useJavaScan, useSaveSettings, useSettings } from "../hooks/queries";
+import { useJavaRuntimes, useJavaScan, useJavaAdd, useJavaRemove, useSaveSettings, useSettings } from "../hooks/queries";
 import { toast } from "../stores/toastStore";
 import { uiStore, type ThemeMode } from "../stores/uiStore";
 import { APP_VERSION } from "../theme/tokens";
+import type { SettingsPayload } from "../api/types";
 
 const SECTIONS = [
   { key: "general", icon: "settings", label: "常规" },
@@ -38,6 +41,7 @@ export function SettingsPage() {
   const [memory, setMemory] = useState<number>(2048);
   const [concurrency, setConcurrency] = useState<number>(8);
   const [jvmArgsText, setJvmArgsText] = useState("");
+  const [mirrorMode, setMirrorMode] = useState<SettingsPayload["mirrorMode"]>("auto");
   const [dirty, setDirty] = useState(false);
 
   useEffect(() => {
@@ -45,6 +49,7 @@ export function SettingsPage() {
     setMemory(settings.data.defaultMemoryMaxMb ?? 2048);
     setConcurrency(settings.data.downloadConcurrency ?? 8);
     setJvmArgsText((settings.data.extraJvmArgs ?? []).join("\n"));
+    setMirrorMode(settings.data.mirrorMode ?? "auto");
     setDirty(false);
   }, [settings.data]);
 
@@ -56,6 +61,7 @@ export function SettingsPage() {
         defaultMemoryMaxMb: memory,
         downloadConcurrency: concurrency,
         extraJvmArgs: jvmArgsText.split("\n").map((s) => s.trim()).filter(Boolean),
+        mirrorMode,
       },
       {
         onSuccess: () => {
@@ -136,12 +142,49 @@ export function SettingsPage() {
                     markDirty();
                   }}
                   min={1}
-                  max={16}
+                  max={64}
                   step={1}
-                  marks
+                  marks={[
+                    { value: 1, label: "1" },
+                    { value: 16, label: "16" },
+                    { value: 32, label: "32" },
+                    { value: 64, label: "64" },
+                  ]}
                   valueLabelDisplay="auto"
                 />
               </Box>
+            </FormRow>
+            <FormRow label="镜像源" description="选择 Minecraft 资源下载的镜像源">
+              <FormControl size="small" sx={{ minWidth: 200 }}>
+                <TextField
+                  select
+                  size="small"
+                  value={mirrorMode}
+                  onChange={(e) => {
+                    setMirrorMode(e.target.value as SettingsPayload["mirrorMode"]);
+                    markDirty();
+                  }}
+                >
+                  <MenuItem value="auto">
+                    <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+                      <AppIcon name="swap_horiz" size={16} />
+                      <span>自动（官方优先，镜像回退）</span>
+                    </Stack>
+                  </MenuItem>
+                  <MenuItem value="official">
+                    <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+                      <AppIcon name="public" size={16} />
+                      <span>官方源</span>
+                    </Stack>
+                  </MenuItem>
+                  <MenuItem value="bmclapi">
+                    <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+                      <AppIcon name="cloud_download" size={16} />
+                      <span>BMCLAPI 镜像（国内加速）</span>
+                    </Stack>
+                  </MenuItem>
+                </TextField>
+              </FormControl>
             </FormRow>
           </Section>
 
@@ -246,7 +289,38 @@ function AppearanceSection() {
 function JavaSection() {
   const java = useJavaRuntimes();
   const scan = useJavaScan();
+  const addJava = useJavaAdd();
+  const removeJava = useJavaRemove();
   const runtimes = java.data ?? [];
+  const [manualPath, setManualPath] = useState("");
+  const [addStatus, setAddStatus] = useState<"idle" | "validating" | "success" | "error">("idle");
+  const [addError, setAddError] = useState("");
+
+  const handleAdd = async () => {
+    const p = manualPath.trim();
+    if (!p) return;
+    setAddStatus("validating");
+    setAddError("");
+    try {
+      await addJava.mutateAsync(p);
+      setAddStatus("success");
+      setManualPath("");
+      toast.success("Java 路径已添加");
+      setTimeout(() => setAddStatus("idle"), 2000);
+    } catch (err) {
+      setAddStatus("error");
+      setAddError(err instanceof Error ? err.message : "验证失败，路径无效");
+    }
+  };
+
+  const handleRemove = async (path: string) => {
+    try {
+      await removeJava.mutateAsync(path);
+      toast.success("已移除");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "移除失败");
+    }
+  };
 
   return (
     <Section id="sec-java" icon="coffee" title="Java 运行时">
@@ -271,13 +345,45 @@ function JavaSection() {
         </Tooltip>
       </Box>
 
+      {/* Manual path input */}
+      <Box sx={{ display: "flex", gap: 1, mb: 2 }}>
+        <TextField
+          size="small"
+          fullWidth
+          placeholder="输入 Java 可执行文件路径，如 C:\Program Files\Eclipse Adoptium\jdk-21.0.3.9-hotspot\bin\java.exe"
+          value={manualPath}
+          onChange={(e) => {
+            setManualPath(e.target.value);
+            if (addStatus !== "idle") setAddStatus("idle");
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") handleAdd();
+          }}
+          error={addStatus === "error"}
+          helperText={addStatus === "error" ? addError : addStatus === "success" ? "验证通过，已添加" : ""}
+          disabled={addJava.isPending}
+        />
+        <Tooltip title="验证路径并添加">
+          <span>
+            <Button
+              variant="contained"
+              onClick={handleAdd}
+              disabled={!manualPath.trim() || addJava.isPending}
+              sx={{ minWidth: 80, flexShrink: 0 }}
+            >
+              {addJava.isPending ? <CircularProgress size={18} /> : "添加"}
+            </Button>
+          </span>
+        </Tooltip>
+      </Box>
+
       {java.isLoading ? (
         <Typography variant="body2" sx={{ color: "text.secondary" }}>
           正在读取已检测的运行时…
         </Typography>
       ) : runtimes.length === 0 ? (
         <Typography variant="body2" sx={{ color: "text.secondary", py: 1.5 }}>
-          未检测到 Java。请安装 Java（如 Adoptium Temurin）后点击右上角刷新。
+          未检测到 Java。请安装 Java（如 Adoptium Temurin）后点击右上角刷新，或手动输入路径添加。
         </Typography>
       ) : (
         <Box sx={{ border: 1, borderColor: "divider", borderRadius: 2, overflowX: "hidden" }}>
@@ -286,7 +392,7 @@ function JavaSection() {
               key={rt.path}
               sx={{
                 display: "grid",
-                gridTemplateColumns: "64px 90px 70px 1fr auto",
+                gridTemplateColumns: "64px 90px 70px 1fr auto auto",
                 alignItems: "center",
                 gap: 1.5,
                 px: 1.75,
@@ -305,6 +411,17 @@ function JavaSection() {
                 </span>
               </Tooltip>
               <span style={{ color: "text.disabled" }}>{rt.vendor ?? ""}</span>
+              {rt.source === "explicit" && (
+                <Tooltip title="移除此路径">
+                  <IconButton
+                    size="small"
+                    onClick={() => handleRemove(rt.path)}
+                    disabled={removeJava.isPending}
+                  >
+                    <AppIcon name="delete" size={16} />
+                  </IconButton>
+                </Tooltip>
+              )}
             </Box>
           ))}
         </Box>

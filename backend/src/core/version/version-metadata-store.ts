@@ -30,18 +30,26 @@ export class VersionMetadataStore {
       return { json: this.readAndValidate(localFile, id), source: "local" };
     }
 
+    // 2. Forge/NeoForge version ids (e.g. "26.2-forge-65.1.3") are not in
+    //    Mojang's manifest. If not installed locally, the caller must install
+    //    the loader first — falling back to the base vanilla JSON would break
+    //    the inheritsFrom chain.
+    if (this.isLoaderId(id)) {
+      throw new VersionNotFoundError(id);
+    }
+
     const entry = await this.manifests.findVersion(id);
     if (!entry) {
       throw new VersionNotFoundError(id);
     }
 
-    // 2. local file matching manifest id (may have been downloaded before)
+    // 3. local file matching manifest id (may have been downloaded before)
     if (localFile && fs.existsSync(localFile)) {
       return { json: this.readAndValidate(localFile, id), source: "local" };
     }
 
-    // 3. remote with disk cache handled by http-level caching of the raw text is
-    // not applicable here (binary integrity via sha1); use explicit file cache.
+    // 4. remote with disk cache handled by http-level caching of the raw text is
+    //    not applicable here (binary integrity via sha1); use explicit file cache.
     const cacheFile = path.join(this.config.cacheDir, `version-${entry.sha1}.json`);
     if (fs.existsSync(cacheFile)) {
       try {
@@ -77,6 +85,11 @@ export class VersionMetadataStore {
     const safeId = id.replace(/[^a-zA-Z0-9._-]/g, "_");
     if (safeId !== id) return null;
     return path.join(this.config.versionsDir, id, `${id}.json`);
+  }
+
+  /** Whether the version id was produced by a mod-loader adapter (contains a loader infix). */
+  private isLoaderId(id: string): boolean {
+    return /-forge-|-neoforge-|^forge-|^neoforge-/.test(id);
   }
 
   private localVersionFile(id: string): string | null {

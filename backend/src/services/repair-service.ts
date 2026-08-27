@@ -11,7 +11,7 @@ import { LoaderRegistry } from "../core/loaders/loader-registry.js";
 import { currentRuntime } from "../utils/runtime-env.js";
 import { ResolvedLibrary, ResolvedNativeLibrary } from "../core/version/types.js";
 import { sha1File } from "../utils/hash.js";
-import { InstanceNotFoundError } from "../errors/index.js";
+import { AppError, InstanceNotFoundError } from "../errors/index.js";
 
 export interface RepairReport {
   instanceId: string;
@@ -177,7 +177,14 @@ export class RepairService {
       if (adapter) {
         const candidates = adapter.versionIdCandidates(instance.minecraftVersion, instance.loaderVersion);
         const installed = candidates.find((id) => this.versions.hasLocal(id));
-        return installed ?? candidates[0] ?? `${instance.loader}-${instance.loaderVersion}-${instance.minecraftVersion}`;
+        if (!installed) {
+          throw new AppError(
+            "VERSION_NOT_FOUND",
+            `Mod loader ${instance.loader} ${instance.loaderVersion} is not installed. Please install it before repairing.`,
+            404,
+          );
+        }
+        return installed;
       }
       return `${instance.loader}-${instance.loaderVersion}-${instance.minecraftVersion}`;
     }

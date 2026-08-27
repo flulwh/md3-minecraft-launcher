@@ -2,6 +2,7 @@ import { z } from "zod";
 import { CachedFetcher } from "../../infrastructure/cache/cache.js";
 import { Logger } from "../../config/logger.js";
 import { manifestSources, MirrorMode } from "../../infrastructure/mirror/mirrors.js";
+import type { SettingsService } from "../../services/settings-service.js";
 
 const manifestSchema = z.object({
   latest: z.object({
@@ -37,19 +38,26 @@ export interface VersionManifest {
 }
 
 export class VersionManifestService {
-  private readonly mode: MirrorMode;
+  private readonly fallbackMode: MirrorMode;
 
   constructor(
     private readonly cachedFetcher: CachedFetcher,
     private readonly logger: Logger,
     mode: MirrorMode = "auto",
+    private readonly settings?: SettingsService,
   ) {
-    this.mode = mode;
+    this.fallbackMode = mode;
+  }
+
+  private async getMirrorMode(): Promise<MirrorMode> {
+    if (this.settings) return this.settings.getMirrorMode();
+    return this.fallbackMode;
   }
 
   async getManifest(): Promise<VersionManifest> {
+    const mode = await this.getMirrorMode();
     let lastError: unknown;
-    for (const url of manifestSources(this.mode)) {
+    for (const url of manifestSources(mode)) {
       try {
         const { data } = await this.cachedFetcher.getJsonWithCache<unknown>(
           url,

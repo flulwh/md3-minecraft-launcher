@@ -21,6 +21,7 @@ export const Events = {
   INSTANCE_UPDATED: "instance.updated",
   CONTENT_CHANGED: "content.changed",
   JAVA_SCAN_DONE: "java.scan.done",
+  PROVISIONING_FAILED: "provisioning.failed",
 } as const;
 
 export interface MinecraftLogData {

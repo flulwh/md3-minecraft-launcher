@@ -199,6 +199,7 @@ export interface SettingsPayload {
   defaultMemoryMaxMb?: number;
   preferredJavaPath?: string | null;
   extraJvmArgs?: string[];
+  mirrorMode?: "auto" | "official" | "bmclapi";
 }
 
 export interface ManifestVersion {
@@ -265,6 +266,27 @@ export interface EventEnvelope<T = unknown> {
   instanceId?: string;
   data: T;
 }
+
+export interface ProvisioningFailedData {
+  instanceId: string;
+  error: string;
+}
+
+export const Events = {
+  DOWNLOAD_PROGRESS: "download.progress",
+  DOWNLOAD_COMPLETED: "download.completed",
+  DOWNLOAD_FAILED: "download.failed",
+  REPAIR_PROGRESS: "repair.progress",
+  MINECRAFT_STARTING: "minecraft.starting",
+  MINECRAFT_STARTED: "minecraft.started",
+  MINECRAFT_LOG: "minecraft.log",
+  MINECRAFT_EXIT: "minecraft.exit",
+  MINECRAFT_CRASH: "minecraft.crash",
+  INSTANCE_UPDATED: "instance.updated",
+  CONTENT_CHANGED: "content.changed",
+  JAVA_SCAN_DONE: "java.scan.done",
+  PROVISIONING_FAILED: "provisioning.failed",
+} as const;
 
 export interface MinecraftLogData {
   level: string;

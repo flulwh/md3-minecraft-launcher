@@ -26,6 +26,7 @@ import { LaunchService } from "./services/launch-service.js";
 import { RepairService } from "./services/repair-service.js";
 import { SettingsService } from "./services/settings-service.js";
 import { ContentManager } from "./core/content/content-service.js";
+import { AutoDependencyService } from "./core/content/auto-dependency.js";
 import { MarketService } from "./core/market/market-service.js";
 import { WebSocketManager } from "./websocket/manager.js";
 
@@ -66,6 +67,7 @@ export class AppContainer {
   readonly settings: SettingsService;
   readonly content: ContentManager;
   readonly market: MarketService;
+  readonly autoDeps: AutoDependencyService;
 
   constructor(config: AppConfig) {
     this.config = config;
@@ -78,11 +80,15 @@ export class AppContainer {
       : config.env.DATABASE_URL;
     this.db = new Database(this.logger, dbUrl);
 
+    // --- settings (needed by download/asset/manifest services for mirror mode)
+    this.settings = new SettingsService(this.db);
+
     // --- version domain
     this.manifests = new VersionManifestService(
       this.cachedFetcher,
       this.logger.child({ module: "version-manifest" }),
       config.env.MIRROR as MirrorMode,
+      this.settings,
     );
     this.versionStore = new VersionMetadataStore(config, this.http, this.manifests, this.logger.child({ module: "version-store" }));
     this.versionResolver = new VersionResolver(this.versionStore, this.logger.child({ module: "version-resolver" }));
@@ -101,6 +107,7 @@ export class AppContainer {
       this.downloadManager,
       this.logger.child({ module: "assets" }),
       config.env.MIRROR as MirrorMode,
+      this.settings,
     );
     this.downloads = new DownloadService(
       config,
@@ -110,6 +117,7 @@ export class AppContainer {
       this.logger.child({ module: "download-service" }),
       this.http,
       config.env.MIRROR as MirrorMode,
+      this.settings,
     );
     wireDownloadEvents(this.downloadManager, this.bus);
     attachDownloadPersistence(
@@ -157,7 +165,7 @@ export class AppContainer {
       this.loaders,
     );
 
-    // --- repair + settings
+    // --- repair
     this.repair = new RepairService(
       config,
       this.versions,
@@ -168,7 +176,6 @@ export class AppContainer {
       this.logger.child({ module: "repair" }),
       this.loaders,
     );
-    this.settings = new SettingsService(this.db);
 
     // --- market (search / detail / versions, cached against upstream rate limits)
     this.market = new MarketService(this.http, config, this.logger.child({ module: "market" }));
@@ -182,6 +189,14 @@ export class AppContainer {
       this.logger.child({ module: "content" }),
       this.downloadManager,
       this.market,
+    );
+
+    // --- auto-dependency installer (Fabric API, QSL, etc.)
+    this.autoDeps = new AutoDependencyService(
+      this.instances,
+      this.market,
+      this.content,
+      this.logger.child({ module: "auto-deps" }),
     );
 
     this.ws = new WebSocketManager(this.bus, this.logger.child({ module: "ws" }));

@@ -13,6 +13,7 @@ import { currentRuntime } from "../utils/runtime-env.js";
 import { prepareNatives } from "../core/natives/native-extractor.js";
 import { urlCandidates, MirrorMode } from "../infrastructure/mirror/mirrors.js";
 import { assertInside } from "../utils/paths.js";
+import type { SettingsService } from "./settings-service.js";
 
 export interface ProvisionResult {
   clientJar: string;
@@ -32,7 +33,7 @@ export interface ProvisionResult {
  * which also makes this the engine behind repair.
  */
 export class DownloadService {
-  private readonly mirrorMode: MirrorMode;
+  private readonly fallbackMirrorMode: MirrorMode;
 
   constructor(
     private readonly config: AppConfig,
@@ -42,8 +43,14 @@ export class DownloadService {
     private readonly logger: Logger,
     private readonly http: HttpClient,
     mirrorMode: MirrorMode = "auto",
+    private readonly settings?: SettingsService,
   ) {
-    this.mirrorMode = mirrorMode;
+    this.fallbackMirrorMode = mirrorMode;
+  }
+
+  private async getMirrorMode(): Promise<MirrorMode> {
+    if (this.settings) return this.settings.getMirrorMode();
+    return this.fallbackMirrorMode;
   }
 
   /** Shared library/asset store location (used by instance repair too). */
@@ -94,9 +101,10 @@ export class DownloadService {
       throw new Error(`Version '${resolved.id}' provides no client download metadata`);
     }
 
+    const mirrorMode = await this.getMirrorMode();
     await this.runBatch([
       {
-        urls: urlCandidates(artifact.url, this.mirrorMode),
+        urls: urlCandidates(artifact.url, mirrorMode),
         dest,
         sha1: artifact.sha1,
         size: artifact.size,
@@ -109,10 +117,11 @@ export class DownloadService {
   }
 
   async ensureLibraries(libraries: ResolvedLibrary[]): Promise<void> {
+    const mirrorMode = await this.getMirrorMode();
     const requests: DownloadRequest[] = libraries
       .filter((lib) => lib.artifact.urls.length > 0)
       .map((lib) => ({
-        urls: lib.artifact.urls.flatMap((u) => urlCandidates(u, this.mirrorMode)),
+        urls: lib.artifact.urls.flatMap((u) => urlCandidates(u, mirrorMode)),
         dest: lib.artifact.file,
         ...(lib.artifact.sha1 !== undefined ? { sha1: lib.artifact.sha1 } : {}),
         ...(lib.artifact.size !== undefined ? { size: lib.artifact.size } : {}),
@@ -123,8 +132,9 @@ export class DownloadService {
   }
 
   async ensureNativeJars(natives: ResolvedNativeLibrary[]): Promise<void> {
+    const mirrorMode = await this.getMirrorMode();
     const requests: DownloadRequest[] = natives.map((n) => ({
-      urls: n.artifact.urls.flatMap((u) => urlCandidates(u, this.mirrorMode)),
+      urls: n.artifact.urls.flatMap((u) => urlCandidates(u, mirrorMode)),
       dest: n.artifact.file,
       ...(n.artifact.sha1 !== undefined ? { sha1: n.artifact.sha1 } : {}),
       ...(n.artifact.size !== undefined ? { size: n.artifact.size } : {}),

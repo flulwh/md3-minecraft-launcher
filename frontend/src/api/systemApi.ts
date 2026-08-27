@@ -43,4 +43,10 @@ export const javaApi = {
   scan: (): Promise<JavaScanResult> => http.post("/api/v1/java/scan"),
   recommend: (version: string): Promise<JavaRecommendation> =>
     http.get(`/api/v1/java/recommendations?version=${encodeURIComponent(version)}`),
+  validate: (path: string): Promise<JavaRuntime> =>
+    http.post("/api/v1/java/validate", { path }),
+  add: (path: string): Promise<JavaRuntime> =>
+    http.post("/api/v1/java/add", { path }),
+  remove: (path: string): Promise<{ removed: boolean }> =>
+    http.del("/api/v1/java/remove", { path }),
 };

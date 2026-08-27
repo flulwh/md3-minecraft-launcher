@@ -1,11 +1,13 @@
 import { z } from "zod";
 import { Database } from "../infrastructure/database/database.js";
+import type { MirrorMode } from "../infrastructure/mirror/mirrors.js";
 
 export const settingsSchema = z.object({
   downloadConcurrency: z.number().int().min(1).max(64).optional(),
   defaultMemoryMaxMb: z.number().int().min(256).max(65536).optional(),
   preferredJavaPath: z.string().max(512).nullable().optional(),
   extraJvmArgs: z.array(z.string()).max(128).optional(),
+  mirrorMode: z.enum(["auto", "official", "bmclapi"]).optional(),
 });
 
 export type SettingsPayload = z.infer<typeof settingsSchema>;
@@ -30,6 +32,8 @@ export class SettingsService {
           if (value === null || typeof value === "string") out.preferredJavaPath = value;
         } else if (row.key === "extraJvmArgs" && Array.isArray(value)) {
           out.extraJvmArgs = value.filter((v): v is string => typeof v === "string");
+        } else if (row.key === "mirrorMode" && typeof value === "string") {
+          out.mirrorMode = value as MirrorMode;
         }
       } catch {
         /* skip malformed */
@@ -38,12 +42,19 @@ export class SettingsService {
     return out;
   }
 
+  /** Returns the active mirror mode, falling back to "auto". */
+  async getMirrorMode(): Promise<MirrorMode> {
+    const settings = await this.getAll();
+    return (settings.mirrorMode as MirrorMode) ?? "auto";
+  }
+
   async update(patch: SettingsPayload): Promise<SettingsPayload> {
     const entries: Array<[string, unknown]> = [];
     if (patch.downloadConcurrency !== undefined) entries.push(["downloadConcurrency", patch.downloadConcurrency]);
     if (patch.defaultMemoryMaxMb !== undefined) entries.push(["defaultMemoryMaxMb", patch.defaultMemoryMaxMb]);
     if (patch.preferredJavaPath !== undefined) entries.push(["preferredJavaPath", patch.preferredJavaPath]);
     if (patch.extraJvmArgs !== undefined) entries.push(["extraJvmArgs", patch.extraJvmArgs]);
+    if (patch.mirrorMode !== undefined) entries.push(["mirrorMode", patch.mirrorMode]);
 
     for (const [key, value] of entries) {
       await this.db.client.setting.upsert({

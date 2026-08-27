@@ -103,7 +103,14 @@ export class LaunchService {
         // resolve against the candidate that is actually installed locally.
         const candidates = adapter.versionIdCandidates(instance.minecraftVersion, instance.loaderVersion);
         const installed = candidates.find((id) => this.versions.hasLocal(id));
-        resolvedVersionId = installed ?? candidates[0] ?? `${instance.loader}-${instance.loaderVersion}-${instance.minecraftVersion}`;
+        if (!installed) {
+          throw new AppError(
+            "VERSION_NOT_FOUND",
+            `Mod loader ${instance.loader} ${instance.loaderVersion} is not installed. Please install it before launching.`,
+            404,
+          );
+        }
+        resolvedVersionId = installed;
       } else {
         resolvedVersionId = `${instance.loader}-${instance.loaderVersion}-${instance.minecraftVersion}`;
       }

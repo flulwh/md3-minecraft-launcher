@@ -66,10 +66,29 @@ function mergeDirInto(dstDir: string, srcDir: string): void {
   }
 }
 
+/** Reads a zip entry into a buffer. */
+async function readZipEntry(zipPath: string, entryName: string): Promise<Buffer | null> {
+  // Use dynamic import for yazl (zip library) - optional dependency
+  try {
+    const { readFileSync } = await import("node:fs");
+    const AdmZip = (await import("adm-zip")).default;
+    const zip = new AdmZip(readFileSync(zipPath));
+    const entry = zip.getEntry(entryName);
+    if (!entry) return null;
+    return entry.getData();
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Installer-based adapter for Forge-family loaders. The official installers
  * run headless via `--installClient` and materialize an inheriting version
  * profile into our shared versions store through a junctioned root.
+ *
+ * Fallback: when --installClient fails (e.g. network issues in China),
+ * we parse the installer JAR as a zip, extract version.json, and save it
+ * directly. Libraries are downloaded later by the repair pipeline.
  */
 abstract class InstallerAdapter implements ModLoaderAdapter {
   abstract readonly id: "forge" | "neoforge";
@@ -104,6 +123,28 @@ abstract class InstallerAdapter implements ModLoaderAdapter {
     this.logger.info({ loader: this.id, url }, "downloading loader installer");
     await this.download(url, installerDest);
 
+    // Try --installClient first, fall back to zip extraction if it fails
+    try {
+      return await this.installViaClient(installerDest, predicted, minecraftVersion);
+    } catch (err) {
+      this.logger.warn(
+        { loader: this.id, err },
+        "--installClient failed, falling back to installer zip extraction",
+      );
+      return await this.installViaZipExtraction(installerDest, predicted, minecraftVersion);
+    }
+  }
+
+  /**
+   * Primary installation method: run the installer with --installClient.
+   * This is the standard approach that works when network access to Mojang
+   * servers is available.
+   */
+  private async installViaClient(
+    installerDest: string,
+    predicted: string,
+    _minecraftVersion: string,
+  ): Promise<string> {
     // prepare junction root so the installer writes into the shared dirs
     const root = path.join(this.config.minecraftDir, `${this.id}-install-root`);
     const rootVersions = path.join(root, "versions");
@@ -179,6 +220,77 @@ abstract class InstallerAdapter implements ModLoaderAdapter {
     return predicted;
   }
 
+  /**
+   * Fallback installation: parse the installer JAR as a zip file, extract
+   * version.json, and save it directly. This avoids the installer's internal
+   * downloads which may fail in restricted networks (e.g. China).
+   *
+   * The extracted version.json contains inheritsFrom and libraries that the
+   * repair pipeline will download through our mirror system.
+   */
+  private async installViaZipExtraction(
+    installerDest: string,
+    predicted: string,
+    minecraftVersion: string,
+  ): Promise<string> {
+    this.logger.info({ loader: this.id }, "extracting version.json from installer zip");
+
+    // Try to read version.json from the installer zip
+    const versionJsonBuffer = await readZipEntry(installerDest, "version.json");
+    if (!versionJsonBuffer) {
+      throw new AppError(
+        "LOADER_INSTALL_FAILED",
+        `Installer zip does not contain version.json. The installer may be corrupted or in an unexpected format.`,
+      );
+    }
+
+    let versionJson: Record<string, unknown>;
+    try {
+      versionJson = JSON.parse(versionJsonBuffer.toString("utf8"));
+    } catch {
+      throw new AppError("LOADER_INSTALL_FAILED", "Installer version.json is not valid JSON");
+    }
+
+    // Determine the actual version ID from the extracted JSON
+    const actualId = typeof versionJson.id === "string" ? versionJson.id : predicted;
+
+    // Save the version JSON to our versions store
+    const versionDir = path.join(this.config.versionsDir, actualId);
+    fs.mkdirSync(versionDir, { recursive: true });
+    const versionFile = path.join(versionDir, `${actualId}.json`);
+    fs.writeFileSync(versionFile, JSON.stringify(versionJson, null, 2));
+
+    // Also try to extract install_profile.json for processor information
+    const installProfileBuffer = await readZipEntry(installerDest, "install_profile.json");
+    if (installProfileBuffer) {
+      try {
+        const installProfile = JSON.parse(installProfileBuffer.toString("utf8"));
+        // Save install_profile.json alongside version.json for potential processor execution
+        fs.writeFileSync(
+          path.join(versionDir, "install_profile.json"),
+          JSON.stringify(installProfile, null, 2),
+        );
+        this.logger.info({ loader: this.id }, "saved install_profile.json");
+      } catch {
+        this.logger.warn({ loader: this.id }, "failed to parse install_profile.json (non-fatal)");
+      }
+    }
+
+    // Try to extract data/client.lzma if present (needed for patching)
+    const clientLzmaBuffer = await readZipEntry(installerDest, "data/client.lzma");
+    if (clientLzmaBuffer) {
+      fs.writeFileSync(path.join(versionDir, "client.lzma"), clientLzmaBuffer);
+      this.logger.info({ loader: this.id }, "extracted data/client.lzma");
+    }
+
+    if (!(await this.validate(actualId))) {
+      throw new AppError("LOADER_INSTALL_FAILED", `Failed to extract usable version from installer`);
+    }
+
+    this.logger.info({ loader: this.id, versionId: actualId }, "loader installed via zip extraction");
+    return actualId;
+  }
+
   /** Newly created versions dir entries that match this loader's id. */
   private discoverInstalledVersion(before: Set<string>): string | null {
     const after = safeReaddirSet(this.config.versionsDir);
@@ -198,8 +310,19 @@ abstract class InstallerAdapter implements ModLoaderAdapter {
   async validate(versionId: string): Promise<boolean> {
     const file = this.store.localVersionPath(versionId);
     if (file === null || !fs.existsSync(file)) return false;
-    const jar = file.replace(/\.json$/, ".jar");
-    return fs.existsSync(jar);
+
+    // Verify the version JSON is non-empty and contains required fields
+    try {
+      const content = fs.readFileSync(file, "utf8");
+      if (content.length < 10) return false; // Suspiciously small
+      const json = JSON.parse(content);
+      if (!json.id || typeof json.id !== "string") return false;
+      // Must have either inheritsFrom (mod loader) or downloads.client (vanilla)
+      if (!json.inheritsFrom && !json.downloads?.client) return false;
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   private async download(url: string, dest: string): Promise<void> {

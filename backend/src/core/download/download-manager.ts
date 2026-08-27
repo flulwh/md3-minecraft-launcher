@@ -137,6 +137,12 @@ export class DownloadManager {
     };
   }
 
+  /** Dynamically update the max concurrent downloads. Triggers scheduling. */
+  setConcurrency(n: number): void {
+    this.config.env.DOWNLOAD_CONCURRENCY = n;
+    this.schedule();
+  }
+
   /** Pauses an active or queued task (keeps .part data for resuming). */
   pause(taskId: string): boolean {
     const task = this.tasks.get(taskId);

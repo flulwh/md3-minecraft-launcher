@@ -9,6 +9,7 @@ import { DownloadRequest } from "../download/types.js";
 import { sha1File } from "../../utils/hash.js";
 import { assertInside } from "../../utils/paths.js";
 import { MirrorMode, urlCandidates } from "../../infrastructure/mirror/mirrors.js";
+import type { SettingsService } from "../../services/settings-service.js";
 
 const ASSET_BASES = [
   "https://resources.download.minecraft.net",
@@ -35,7 +36,7 @@ export interface AssetIndexContent {
  * verification.
  */
 export class AssetService {
-  private readonly mirrorMode: MirrorMode;
+  private readonly fallbackMirrorMode: MirrorMode;
 
   constructor(
     private readonly config: AppConfig,
@@ -43,8 +44,14 @@ export class AssetService {
     private readonly downloads: DownloadManager,
     private readonly logger: Logger,
     mirrorMode: MirrorMode = "auto",
+    private readonly settings?: SettingsService,
   ) {
-    this.mirrorMode = mirrorMode;
+    this.fallbackMirrorMode = mirrorMode;
+  }
+
+  private async getMirrorMode(): Promise<MirrorMode> {
+    if (this.settings) return this.settings.getMirrorMode();
+    return this.fallbackMirrorMode;
   }
 
   assetIndexPath(indexId: string): string {
@@ -113,13 +120,14 @@ export class AssetService {
   }
 
   /** Checks which objects already exist and plans downloads for missing ones. */
-  plan(index: AssetIndexContent): {
+  async plan(index: AssetIndexContent): Promise<{
     totalObjects: number;
     pendingDownloads: number;
     totalBytes: number;
     presentObjects: number;
     requests: DownloadRequest[];
-  } {
+  }> {
+    const mirrorMode = await this.getMirrorMode();
     const requests: DownloadRequest[] = [];
     let presentObjects = 0;
     let totalBytes = 0;
@@ -141,7 +149,7 @@ export class AssetService {
       }
       const canonical = ASSET_BASES.map((base) => `${base}/${obj.hash.slice(0, 2)}/${obj.hash}`);
       requests.push({
-        urls: canonical.flatMap((u) => urlCandidates(u, this.mirrorMode)),
+        urls: canonical.flatMap((u) => urlCandidates(u, mirrorMode)),
         dest,
         size: obj.size,
         kind: "asset",
@@ -173,7 +181,7 @@ export class AssetService {
       return this.ensureAssets(index, indexId);
     }
 
-    const planned = this.plan(index);
+    const planned = await this.plan(index);
     const batch = await this.downloads.enqueueAll(planned.requests);
 
     if (this.needsVirtualLayout(index)) {

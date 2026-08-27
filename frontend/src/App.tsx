@@ -1,6 +1,7 @@
 import { CssBaseline, GlobalStyles, ThemeProvider } from "@mui/material";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { HashRouter, Navigate, Route, Routes } from "react-router-dom";
+import { useEffect } from "react";
 import { ApiError } from "./api/http";
 import { AppShell } from "./layout/AppShell";
 import { AccountsPage } from "./pages/AccountsPage";
@@ -13,6 +14,9 @@ import { MarketplacePage } from "./pages/MarketplacePage";
 import { MarketSearchPage } from "./pages/MarketSearchPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { theme } from "./theme/createAppTheme";
+import { wsClient } from "./ws/wsClient";
+import { Events, type ProvisioningFailedData } from "./api/types";
+import { toast } from "./stores/toastStore";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -27,6 +31,19 @@ const queryClient = new QueryClient({
     },
   },
 });
+
+function ProvisioningFailureListener(): null {
+  useEffect(() => {
+    const handler = (envelope: { type: string; data: unknown }) => {
+      if (envelope.type === Events.PROVISIONING_FAILED) {
+        const data = envelope.data as ProvisioningFailedData;
+        toast.error(`实例 ${data.instanceId.slice(0, 8)}… 初始化失败：${data.error}`);
+      }
+    };
+    return wsClient.on(handler);
+  }, []);
+  return null;
+}
 
 export function App(): React.JSX.Element {
   return (
@@ -52,6 +69,7 @@ export function App(): React.JSX.Element {
             },
           }}
         />
+        <ProvisioningFailureListener />
         <HashRouter>
           <Routes>
             <Route element={<AppShell />}>

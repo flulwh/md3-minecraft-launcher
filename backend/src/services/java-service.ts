@@ -21,10 +21,43 @@ export class JavaService {
   ) {}
 
   async scan(): Promise<JavaScanResult> {
-    const runtimes = await this.manager.detectAll();
-    this.cache = { runtimes, scannedAt: Date.now() };
+    const detected = await this.manager.detectAll();
 
-    for (const rt of runtimes) {
+    // Merge manually-added (explicit) runtimes from the database so they
+    // survive cache invalidation and re-scans.
+    const explicitRows = await this.db.client.javaRuntimeRecord.findMany({
+      where: { source: "explicit" },
+    });
+    const detectedPaths = new Set(detected.map((r) => r.path.toLowerCase()));
+    const explicitRuntimes: JavaRuntime[] = [];
+    for (const row of explicitRows) {
+      if (detectedPaths.has(row.path.toLowerCase())) continue; // already present
+      // Re-probe to get fresh version/arch info; skip if the binary is gone.
+      try {
+        const rt = await this.manager.probeExplicitPath(row.path);
+        explicitRuntimes.push(rt);
+      } catch {
+        this.logger.debug({ path: row.path }, "explicit java probe failed; keeping DB record");
+        explicitRuntimes.push({
+          path: row.path,
+          majorVersion: row.majorVersion,
+          architecture: row.architecture,
+          ...(row.vendor ? { vendor: row.vendor } : {}),
+          ...(row.versionString ? { versionString: row.versionString } : {}),
+          source: "explicit",
+        });
+      }
+    }
+
+    const runtimes = [...detected, ...explicitRuntimes];
+    // Final dedup by path (case-insensitive).
+    const byPath = new Map<string, JavaRuntime>();
+    for (const rt of runtimes) byPath.set(rt.path.toLowerCase(), rt);
+    const unique = [...byPath.values()].sort((a, b) => b.majorVersion - a.majorVersion);
+
+    this.cache = { runtimes: unique, scannedAt: Date.now() };
+
+    for (const rt of detected) {
       await this.db.client.javaRuntimeRecord.upsert({
         where: { path: rt.path },
         update: {
@@ -44,7 +77,7 @@ export class JavaService {
       });
     }
 
-    this.logger.info({ count: runtimes.length }, "java scan complete");
+    this.logger.info({ count: unique.length }, "java scan complete");
     return this.cache;
   }
 
@@ -53,6 +86,54 @@ export class JavaService {
       return this.cache.runtimes;
     }
     return (await this.scan()).runtimes;
+  }
+
+  /** Validates an explicit Java path by probing `java -version`. */
+  async validatePath(javaPath: string): Promise<JavaRuntime> {
+    return this.manager.probeExplicitPath(javaPath);
+  }
+
+  /**
+   * Validates and persists a manually-added Java path with `source: "explicit"`.
+   * Returns the probed runtime info.  Throws if the path is not a working Java.
+   */
+  async addExplicit(javaPath: string): Promise<JavaRuntime> {
+    const rt = await this.manager.probeExplicitPath(javaPath);
+
+    await this.db.client.javaRuntimeRecord.upsert({
+      where: { path: rt.path },
+      update: {
+        majorVersion: rt.majorVersion,
+        architecture: rt.architecture,
+        vendor: rt.vendor ?? null,
+        versionString: rt.versionString ?? null,
+        source: "explicit",
+        lastVerifiedAt: new Date(),
+      },
+      create: {
+        path: rt.path,
+        majorVersion: rt.majorVersion,
+        architecture: rt.architecture,
+        vendor: rt.vendor ?? null,
+        versionString: rt.versionString ?? null,
+        source: "explicit",
+      },
+    });
+
+    // Invalidate cache so the next list() call includes the new entry.
+    this.cache = null;
+
+    this.logger.info({ path: rt.path, majorVersion: rt.majorVersion }, "explicit java added");
+    return rt;
+  }
+
+  /** Removes a manually-added Java path from the database. */
+  async removeExplicit(javaPath: string): Promise<void> {
+    await this.db.client.javaRuntimeRecord.deleteMany({
+      where: { path: javaPath, source: "explicit" },
+    });
+    this.cache = null;
+    this.logger.info({ path: javaPath }, "explicit java removed");
   }
 
   /** Resolves the java binary to use, honouring an explicit override first. */

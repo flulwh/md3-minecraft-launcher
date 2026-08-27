@@ -4,6 +4,7 @@ import { ok } from "../respond.js";
 import { createInstanceSchema, patchInstanceSchema, idParamSchema, repairSchema } from "../schemas/index.js";
 import { parseBody } from "./health.js";
 import { z } from "zod";
+import { Events } from "../../websocket/events.js";
 
 export async function instanceRoutes(app: FastifyInstance, c: AppContainer): Promise<void> {
   app.get("/api/v1/instances", async (_req, reply) => {
@@ -15,9 +16,13 @@ export async function instanceRoutes(app: FastifyInstance, c: AppContainer): Pro
     const instance = await c.instances.create(body);
     // Background provisioning: install the loader (if any) then download the
     // version's client jar, libraries, natives and assets right after creation.
-    void provisionNewInstance(c, instance).catch((err) =>
-      c.logger.warn({ instanceId: instance.id, err }, "instance provisioning failed"),
-    );
+    void provisionNewInstance(c, instance).catch((err) => {
+      c.logger.warn({ instanceId: instance.id, err }, "instance provisioning failed");
+      c.bus.publish(Events.PROVISIONING_FAILED, {
+        instanceId: instance.id,
+        error: err instanceof Error ? err.message : String(err),
+      }, instance.id);
+    });
     return ok(reply, instance, 201);
   });
 
@@ -67,4 +72,5 @@ async function provisionNewInstance(
     }
   }
   await c.repair.repair(instance.id);
+  await c.autoDeps.installForInstance(instance.id, instance.minecraftVersion, instance.loader);
 }

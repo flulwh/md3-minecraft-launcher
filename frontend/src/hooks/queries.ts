@@ -138,6 +138,22 @@ export function useJavaScan() {
   });
 }
 
+export function useJavaAdd() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (path: string) => javaApi.add(path),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: qk.java }),
+  });
+}
+
+export function useJavaRemove() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (path: string) => javaApi.remove(path),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: qk.java }),
+  });
+}
+
 export function useVersions(filter: VersionsFilter) {
   return useQuery({
     queryKey: qk.versions(filter),

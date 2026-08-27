@@ -11,6 +11,13 @@ export async function settingsRoutes(app: FastifyInstance, c: AppContainer): Pro
 
   app.put("/api/v1/settings", async (req, reply) => {
     const body = parseBody(updateSettingsSchema, req.body);
-    return ok(reply, await c.settings.update(body));
+    const result = await c.settings.update(body);
+
+    // Apply concurrency change to the running download manager.
+    if (body.downloadConcurrency !== undefined) {
+      c.downloadManager.setConcurrency(body.downloadConcurrency);
+    }
+
+    return ok(reply, result);
   });
 }
