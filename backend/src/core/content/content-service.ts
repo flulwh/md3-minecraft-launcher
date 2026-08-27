@@ -250,12 +250,12 @@ export class ContentManager {
       });
     }
 
-    // Resolve & install required dependencies recursively.
+    // Resolve & install required dependencies recursively. Each dependency is
+    // classified by its own type inside the recursive call (modpack/world
+    // dependencies resolve to an empty result and are effectively skipped).
     let installed = [fileName];
     for (const dep of version.dependencies) {
       if (!dep.dependencyId || !dep.versionId) continue;
-      const depKind = MARKET_TYPE_TO_KIND[project.type];
-      if (depKind !== kind) continue; // keep the primary dependency kind
       try {
         const depResult = await this.installVersionChain(
           instanceId,
