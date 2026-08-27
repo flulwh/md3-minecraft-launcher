@@ -117,7 +117,7 @@ export function CreateInstanceDialog({ open, onClose, onCreated }: CreateInstanc
       },
       {
         onSuccess: (inst) => {
-          toast.success(`实例「${inst.name}」已创建`);
+          toast.success(`实例「${inst.name}」已创建，正在自动安装…`);
           onClose();
           onCreated?.(inst.id);
         },

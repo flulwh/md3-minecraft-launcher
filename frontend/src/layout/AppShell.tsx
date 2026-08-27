@@ -16,6 +16,7 @@ import { toastStore } from "../stores/toastStore";
 import { uiStore } from "../stores/uiStore";
 import { wsStore } from "../stores/wsStore";
 import { wsClient } from "../ws/wsClient";
+import { instancesApi } from "../api/instancesApi";
 import { useQueryClient } from "@tanstack/react-query";
 import { qk } from "../hooks/queries";
 import { useDownloads, useLiveSessions } from "../hooks/queries";
@@ -151,6 +152,34 @@ export function AppShell() {
     if (downloads.data) downloadStore.getState().applyInitial(downloads.data.tasks);
   }, [downloads.data]);
 
+  // Reconcile the live install store against the server whenever the socket
+  // (re)connects. WebSocket events published while offline are never replayed,
+  // so a terminal install (READY/FAILED/CANCELLED) or a backend restart could
+  // otherwise leave a stale "正在安装的实例" row behind forever.
+  const connected = wsStore((s) => s.connected);
+  useEffect(() => {
+    if (!connected) return;
+    let cancelled = false;
+    void instancesApi
+      .activeInstalls()
+      .then((snaps) => {
+        if (cancelled) return;
+        const store = installStore.getState();
+        const before = Object.keys(store.active);
+        const active = new Set(snaps.map((s) => s.instanceId));
+        for (const snap of snaps) store.update(snap);
+        for (const id of before) {
+          if (!active.has(id)) store.clear(id);
+        }
+      })
+      .catch(() => {
+        /* server may be mid-restart; the next reconnect retries */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [connected]);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
@@ -175,7 +204,6 @@ export function AppShell() {
     return () => window.removeEventListener("keydown", onKey);
   }, [qc]);
 
-  const connected = wsStore((s) => s.connected);
   const toasts = toastStore((s) => s.toasts);
   const dismissToast = toastStore((s) => s.dismiss);
 

@@ -31,6 +31,8 @@ export const instancesApi = {
     http.post(`/api/v1/instances/${id}/install`),
   installSnapshot: (id: string): Promise<InstallationSnapshot | null> =>
     http.get(`/api/v1/instances/${id}/install`),
+  activeInstalls: (): Promise<InstallationSnapshot[]> =>
+    http.get("/api/v1/installs/active"),
   installPause: (id: string): Promise<{ paused: true }> =>
     http.post(`/api/v1/instances/${id}/install/pause`),
   installResume: (id: string): Promise<{ resumed: true }> =>

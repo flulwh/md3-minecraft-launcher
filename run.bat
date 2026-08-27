@@ -26,6 +26,12 @@ set ROOT=%~dp0
 set BACKEND=%ROOT%backend
 set FRONTEND=%ROOT%frontend
 
+:: tsx watch creates an IPC dir under %TEMP%; C:\Windows\TEMP is protected
+:: (EPERM: operation not permitted), so point TEMP at the user temp instead.
+if not defined LOCALAPPDATA set "LOCALAPPDATA=%USERPROFILE%\AppData\Local"
+set "TEMP=%LOCALAPPDATA%\Temp"
+set "TMP=%TEMP%"
+
 echo [1/2] Starting backend...
 start "MC-Launcher-Backend" cmd /k "cd /d "%BACKEND%" && corepack pnpm dev"
 

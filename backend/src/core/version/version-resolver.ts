@@ -138,10 +138,14 @@ export class VersionResolver {
       };
     }
 
-    // legacy minecraftArguments concatenation
-    if (parent.minecraftArguments && child.minecraftArguments) {
-      result.minecraftArguments = `${parent.minecraftArguments} ${child.minecraftArguments}`;
-    } else if (!result.minecraftArguments) {
+    // legacy minecraftArguments: each version carries the COMPLETE template
+    // (e.g. vanilla 1.12 and its Forge child both spell out --username
+    // --version --gameDir ... --versionType). Concatenating two full templates
+    // duplicates every option and crashes legacy LaunchWrapper (joptsimple)
+    // launches with MultipleArgumentsForOptionException for gameDir. The child
+    // therefore replaces the parent wholesale; only fall back to the parent's
+    // template when the child does not define one.
+    if (result.minecraftArguments === undefined) {
       keepFromParentIfChildMissing("minecraftArguments");
     }
 

@@ -7,7 +7,7 @@ import { AppContainer } from "../../container.js";
 import { ok } from "../respond.js";
 import { createInstanceSchema, patchInstanceSchema, idParamSchema, repairSchema, backupSchema, duplicateSchema } from "../schemas/index.js";
 import { parseBody } from "./health.js";
-import { ValidationError } from "../../errors/index.js";
+import { ValidationError, AppError } from "../../errors/index.js";
 import { z } from "zod";
 import { Events } from "../../websocket/events.js";
 
@@ -19,10 +19,16 @@ export async function instanceRoutes(app: FastifyInstance, c: AppContainer): Pro
   app.post("/api/v1/instances", async (req, reply) => {
     const body = parseBody(createInstanceSchema, req.body);
     const instance = await c.instances.create(body);
-    // Intentionally DO NOT auto-start the install on create. The V2 engine
-    // exposes a separate /install + /plan flow so the UI can present the
-    // planned download size before the user confirms (#11). Callers that want
-    // the old auto-install behaviour can still POST /install after create.
+    // Auto-start the install right after creation so the game is downloaded
+    // without a separate manual step. The V2 session is fire-and-forget and
+    // publishes progress via WebSocket; a synchronous start() failure marks the
+    // row BROKEN with lastError so the UI isn't stuck in CREATED (#14).
+    try {
+      c.installs.start(instance.id);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      await c.instances.setStatus(instance.id, "BROKEN", { lastError: msg });
+    }
     return ok(reply, instance, 201);
   });
 
@@ -31,6 +37,11 @@ export async function instanceRoutes(app: FastifyInstance, c: AppContainer): Pro
     const params = parseBody(idParamSchema as unknown as z.ZodType<{ id: string }>, req.params);
     const instance = await c.instances.get(params.id);
     return ok(reply, await c.installs.plan(instance));
+  });
+
+  /** GET /api/v1/installs/active — live (non-terminal) install sessions. */
+  app.get("/api/v1/installs/active", async (_req, reply) => {
+    return ok(reply, c.installs.activeSnapshots());
   });
 
   /** GET /api/v1/instances/:id/install — current install snapshot (or null). */
@@ -46,15 +57,18 @@ export async function instanceRoutes(app: FastifyInstance, c: AppContainer): Pro
       c.installs.start(params.id);
       return ok(reply, { started: true });
     } catch (err) {
-      // Sync failure (e.g. INSTALL_IN_PROGRESS, or start() throwing for an
-      // unexpected reason) — surface it as a 4xx/5xx and mark the row BROKEN
-      // with lastError so the UI isn't stuck with a misleading CREATED state
-      // (#14).
-      const msg = err instanceof Error ? err.message : String(err);
-      try {
-        await c.instances.setStatus(params.id, "BROKEN", { lastError: msg });
-      } catch {
-        /* best effort; don't mask the original error */
+      // A 409 (INSTALL_IN_PROGRESS) just means an install is already running —
+      // that's not a failure, so DON'T flip the row to BROKEN. Only genuine
+      // start() failures should mark the row BROKEN with lastError so the UI
+      // isn't stuck with a misleading CREATED state (#14).
+      const isConflict = err instanceof AppError && err.httpStatus === 409;
+      if (!isConflict) {
+        const msg = err instanceof Error ? err.message : String(err);
+        try {
+          await c.instances.setStatus(params.id, "BROKEN", { lastError: msg });
+        } catch {
+          /* best effort; don't mask the original error */
+        }
       }
       throw err;
     }

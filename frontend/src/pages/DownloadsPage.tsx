@@ -220,6 +220,9 @@ function ActiveInstalls({
       {live.map((s) => {
         const inst = instances.find((i) => i.id === s.instanceId);
         const phase = s.phase === "DOWNLOADING" ? "download" : "other";
+        // Loader build (PREPARING) reports live byte progress from the adapter,
+        // so render a determinate bar once the expected size is known.
+        const determinate = phase === "download" || (s.phase === "PREPARING" && s.totalBytes > 0);
         return (
           <Box
             key={s.instanceId}
@@ -237,7 +240,7 @@ function ActiveInstalls({
               </Box>
               <Chip size="small" label={INSTALL_PHASE_LABEL[s.phase] ?? s.phase} color={s.phase === "PAUSED" ? "warning" : s.phase === "CANCELLING" ? "default" : "info"} />
             </Box>
-            {phase === "download" ? (
+            {determinate ? (
               <LinearProgress variant="determinate" value={s.progressPct} sx={{ mb: 1 }} />
             ) : (
               <LinearProgress variant="indeterminate" sx={{ mb: 1 }} />
@@ -249,7 +252,9 @@ function ActiveInstalls({
             ) : null}
             <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 1, flexWrap: "wrap" }}>
               <Typography variant="caption" sx={{ color: "text.secondary" }}>
-                {fmtBytes(s.downloadedBytes)} / {fmtBytes(s.totalBytes)}
+                {s.totalBytes > 0
+                  ? `${fmtBytes(s.downloadedBytes)} / ${fmtBytes(s.totalBytes)}`
+                  : "正在计算安装大小…"}
               </Typography>
               <Box sx={{ display: "flex", alignItems: "center", gap: 1.5 }}>
                 {s.speedBps > 0 && (

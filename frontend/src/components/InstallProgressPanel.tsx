@@ -11,7 +11,7 @@ import LinearProgress from "@mui/material/LinearProgress";
 import Typography from "@mui/material/Typography";
 import { useState } from "react";
 import { installStore } from "../stores/installStore";
-import { useInstall, useInstallControl } from "../hooks/queries";
+import { useInstall, useInstallControl, useInstance } from "../hooks/queries";
 import { AppIcon } from "../design-system/AppIcon";
 import { fmtBytes, fmtEta, fmtSpeed } from "../lib/format";
 import type { InstallPhase } from "../api/types";
@@ -57,39 +57,76 @@ export function InstallProgressPanel({ instanceId }: { instanceId: string }) {
   const snap = installStore((s) => s.active[instanceId]);
   const install = useInstall();
   const control = useInstallControl();
+  const instance = useInstance(instanceId);
   const [confirmCancel, setConfirmCancel] = useState(false);
 
-  // No live session: render a lightweight "尚未安装/修复可安装" row instead.
+  // No live session: derive the row from the persisted instance status instead of
+  // always showing "尚未安装" — terminal installs are cleared from installStore,
+  // so a READY instance must render as "已安装", not as uninstalled.
   if (!snap) {
+    const status = instance.data?.status;
+    const installed = status === "READY";
+    const broken = status === "BROKEN";
+    const installing = status === "INSTALLING" || status === "UPDATING";
+    const title = installed
+      ? "实例已安装"
+      : broken
+        ? "实例安装异常"
+        : installing
+          ? "正在安装中…"
+          : "实例尚未安装";
+    const caption = installed
+      ? "游戏主体、加载器与依赖已就绪，可直接启动。"
+      : broken
+        ? instance.data?.lastError ?? "安装过程中出现问题，可重新安装修复。"
+        : installing
+          ? "后台正在下载并安装游戏文件，完成后即可启动。"
+          : "创建实例后会自动开始安装；若未开始，可点击下方按钮。";
     return (
       <Card sx={{ p: 2.5, display: "flex", alignItems: "center", gap: 1.5 }}>
-        <AppIcon name="download" size={22} />
+        <Box
+          sx={{
+            display: "inline-flex",
+            color: installed ? "success.main" : broken ? "error.main" : "inherit",
+          }}
+        >
+          <AppIcon
+            name={installed ? "check_circle" : broken ? "error" : installing ? "sync" : "download"}
+            size={22}
+          />
+        </Box>
         <Box sx={{ flex: 1, minWidth: 0 }}>
           <Typography variant="body2" sx={{ fontWeight: 600 }}>
-            实例尚未安装
+            {title}
           </Typography>
           <Typography variant="caption" sx={{ color: "text.secondary" }}>
-            下载并安装游戏主体、加载器与依赖文件，完成后即可启动。
+            {caption}
           </Typography>
         </Box>
-        <Button
-          variant="contained"
-          startIcon={<AppIcon name="rocket_launch" size={16} />}
-          disabled={install.isPending}
-          onClick={() =>
-            install.mutate(instanceId, {
-              onError: (err) => toast.error(err instanceof Error ? err.message : "启动安装失败"),
-            })
-          }
-        >
-          {install.isPending ? "启动中…" : "开始安装"}
-        </Button>
+        {!installed && !installing && (
+          <Button
+            variant="contained"
+            startIcon={<AppIcon name="rocket_launch" size={16} />}
+            disabled={install.isPending}
+            onClick={() =>
+              install.mutate(instanceId, {
+                onError: (err) => toast.error(err instanceof Error ? err.message : "启动安装失败"),
+              })
+            }
+          >
+            {install.isPending ? "启动中…" : broken ? "重新安装" : "开始安装"}
+          </Button>
+        )}
       </Card>
     );
   }
 
   const running = RUNNING_PHASES.includes(snap.phase);
-  const indeterminate = !["DOWNLOADING", "PAUSED"].includes(snap.phase);
+  // Determinate when bytes are meaningful: the DOWNLOADING phase, a paused
+  // install, or the PREPARING phase once the loader build reports real sizes.
+  const indeterminate =
+    !["DOWNLOADING", "PAUSED"].includes(snap.phase) &&
+    !(snap.phase === "PREPARING" && snap.totalBytes > 0);
 
   return (
     <Card sx={{ p: 2.5 }}>
@@ -106,10 +143,15 @@ export function InstallProgressPanel({ instanceId }: { instanceId: string }) {
           {snap.message ? (
             <Typography variant="caption" sx={{ color: "text.secondary" }}>
               {snap.message}
+              {snap.totalBytes > 0
+                ? ` · ${fmtBytes(snap.downloadedBytes)} / ${fmtBytes(snap.totalBytes)}${snap.speedBps > 0 ? ` · ${fmtSpeed(snap.speedBps)}` : ""}`
+                : ""}
             </Typography>
           ) : (
             <Typography variant="caption" sx={{ color: "text.secondary" }}>
-              {snap.tasksDone}/{snap.tasksTotal} 项 · {fmtBytes(snap.downloadedBytes)} / {fmtBytes(snap.totalBytes)}
+              {snap.totalBytes > 0
+                ? `${snap.tasksDone}/${snap.tasksTotal} 项 · ${fmtBytes(snap.downloadedBytes)} / ${fmtBytes(snap.totalBytes)}`
+                : `${snap.tasksDone}/${snap.tasksTotal} 项 · 正在计算安装大小…`}
               {snap.speedBps > 0 ? ` · ${fmtSpeed(snap.speedBps)}` : ""}
               {snap.etaSec !== null ? ` · 剩余 ${fmtEta(snap.etaSec)}` : ""}
             </Typography>

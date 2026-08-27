@@ -57,6 +57,26 @@ interface Session {
   firstRun: boolean;
   /** Whether the loader build already completed in this session (prevents rebuild on resume). */
   loaderBuilt: boolean;
+  /**
+   * Cumulative download progress of the loader build (installer jar, vanilla
+   * client jar, maven jars). Only meaningful before the install plan exists
+   * (PREPARING phase) — `downloaded`/`total` mirror the adapter's own bytes so
+   * the UI can render a live determinate progress bar instead of 0 B / 0 B.
+   */
+  loaderBytes?: {
+    /** bytes fully completed before the currently-downloading file */
+    base: number;
+    /** content-length of the file currently being downloaded (0 = unknown) */
+    lastFileTotal: number;
+    /** derived cumulative downloaded bytes (base + current file's bytes) */
+    downloaded: number;
+    /** derived cumulative expected bytes (base + current file's total) */
+    total: number;
+    /** rolling download speed (bytes/sec) derived from progress samples */
+    speedBps: number;
+    lastSampleBytes: number;
+    lastSampleAt: number;
+  };
   trackerOff: () => void;
 }
 
@@ -111,6 +131,22 @@ export class InstallationManager {
     const s = this.sessions.get(instanceId);
     if (!s) return null;
     return this.toSnapshot(instanceId, s);
+  }
+
+  /**
+   * Snapshots for every live (non-terminal) install session. Used by clients to
+   * re-sync after a WebSocket reconnect — terminal events that were published
+   * while offline are never replayed, so without this the UI could keep a stale
+   * "正在安装的实例" row after an install finishes.
+   */
+  activeSnapshots(): InstallationSnapshot[] {
+    const out: InstallationSnapshot[] = [];
+    for (const [id, s] of this.sessions) {
+      if (!["READY", "FAILED", "CANCELLED"].includes(s.phase)) {
+        out.push(this.toSnapshot(id, s));
+      }
+    }
+    return out;
   }
 
   /** Builds a plan for a potential install (no bytes are fetched). */
@@ -228,40 +264,34 @@ export class InstallationManager {
     const instance = await this.instances.get(instanceId);
 
     this.setPhase(instanceId, s, instance.id, "ANALYZING");
-    const versionId = await resolveInstallVersionId(this.loaders, this.versions, instance);
-    if (!(await this.yieldIfStop(instanceId, s))) return;
 
-    this.setPhase(instanceId, s, instance.id, "PLANNING");
-    if (s.firstRun) {
-      const plan = s.plan ?? (await this.plans.build(instance));
-      s.plan = plan;
-      s.pending = new Map(
-        plan.tasks
-          .filter((t) => !t.cached && t.kind !== "LOADER")
-          .map((t) => [t.path, t.size]),
-      );
-      s.completedBytes = 0;
-    }
-    if (!(await this.yieldIfStop(instanceId, s))) return;
-    s.firstRun = false;
-
-    this.publish(instanceId, s);
-    const resolved = await this.versions.resolve(versionId);
-
-    // PREPARING: materialize the loader (Forge/Fabric/NeoForge binary pack) before
-    // game files, so the patched client jar exists for provisioning.
-    this.setPhase(instanceId, s, instance.id, "PREPARING");
+    // PREPARING: build the loader FIRST. A loader whose version metadata is not
+    // local yet (e.g. a fresh Forge install) MUST be materialized before we can
+    // resolve its version id / plan its libraries — plan generation and version
+    // resolution depend on the loader-generated version JSON (install_profiles).
+    // Re-runs/resumes skip this via s.loaderBuilt.
     if (instance.loader !== "vanilla" && instance.loaderVersion && !s.loaderBuilt) {
       const adapter = this.loaders.get(instance.loader);
       if (adapter) {
+        this.setPhase(instanceId, s, instance.id, "PREPARING");
         const loaderVersion = instance.loaderVersion;
         const startedAt = Date.now();
+        s.loaderBytes = {
+          base: 0,
+          lastFileTotal: 0,
+          downloaded: 0,
+          total: 0,
+          speedBps: 0,
+          lastSampleBytes: 0,
+          lastSampleAt: startedAt,
+        };
         this.setStage(s, `构建加载器（下载并二进制补丁）… 已用时 0s`);
         s.heartbeat = setInterval(() => {
           this.setStage(s, `构建加载器（下载并二进制补丁）… 已用时 ${Math.round((Date.now() - startedAt) / 1000)}s`);
         }, 1000);
+        const onProgress = this.onLoaderProgress(instanceId);
         const cancelled = await this.runLoaderBuildWithCancel(s, () =>
-          adapter.install(instance.minecraftVersion, loaderVersion),
+          adapter.install(instance.minecraftVersion, loaderVersion, onProgress),
         );
         if (s.heartbeat) clearInterval(s.heartbeat);
         delete s.heartbeat;
@@ -276,6 +306,28 @@ export class InstallationManager {
       }
     }
     if (!(await this.yieldIfStop(instanceId, s))) return;
+
+    const versionId = await resolveInstallVersionId(this.loaders, this.versions, instance);
+    if (!(await this.yieldIfStop(instanceId, s))) return;
+
+    this.setPhase(instanceId, s, instance.id, "PLANNING");
+    if (s.firstRun) {
+      const plan = s.plan ?? (await this.plans.build(instance));
+      s.plan = plan;
+      s.pending = new Map(
+        plan.tasks
+          .filter((t) => !t.cached && t.kind !== "LOADER")
+          .map((t) => [t.path, t.size]),
+      );
+      s.completedBytes = 0;
+      // The install plan now governs byte accounting; drop loader-build progress.
+      delete s.loaderBytes;
+    }
+    if (!(await this.yieldIfStop(instanceId, s))) return;
+    s.firstRun = false;
+
+    this.publish(instanceId, s);
+    const resolved = await this.versions.resolve(versionId);
 
     // DOWNLOADING: client jar + libraries + natives + assets + extraction.
     this.setPhase(instanceId, s, instance.id, "DOWNLOADING");
@@ -532,6 +584,46 @@ export class InstallationManager {
       s.pending.delete(snap.dest);
     };
 
+  /**
+   * Returns a throttled callback that folds the loader adapter's per-file
+   * `(downloaded, total)` reports into cumulative session bytes and re-publishes
+   * the snapshot at PROGRESS_FLUSH_MS. A new file is detected when its
+   * content-length differs from the previous file's, so the completed bytes of
+   * prior files (`base`) roll forward without double counting mirror retries of
+   * the same file.
+   */
+  private onLoaderProgress = (instanceId: string) => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    return (downloaded: number, total: number): void => {
+      const s = this.sessions.get(instanceId);
+      const lb = s?.loaderBytes;
+      if (!s || !lb) return;
+      if (total > 0 && total !== lb.lastFileTotal) {
+        // a new file started; roll the fully-downloaded previous file into base
+        lb.base += lb.lastFileTotal;
+        lb.lastFileTotal = total;
+      }
+      lb.downloaded = lb.base + downloaded;
+      lb.total = lb.base + total;
+      const now = Date.now();
+      const dt = now - lb.lastSampleAt;
+      if (dt >= 500) {
+        const dBytes = lb.downloaded - lb.lastSampleBytes;
+        lb.speedBps = dBytes > 0 ? Math.round((dBytes * 1000) / dt) : lb.speedBps;
+        lb.lastSampleBytes = lb.downloaded;
+        lb.lastSampleAt = now;
+      }
+      if (!timer) {
+        timer = setTimeout(() => {
+          timer = null;
+          const cs = this.sessions.get(instanceId);
+          if (cs && cs.loaderBytes) this.publish(instanceId, cs);
+        }, PROGRESS_FLUSH_MS);
+        timer.unref?.();
+      }
+    };
+  };
+
   private setStage(s: Session, stage: string): void {
     if (s.stage !== stage) s.stage = stage;
     this.publish(s.instanceId, s);
@@ -560,20 +652,28 @@ export class InstallationManager {
 
   private toSnapshot(instanceId: string, s: Session): InstallationSnapshot {
     const plan = s.plan;
-    const totalBytes = plan?.downloadBytes ?? 0;
-    const doneBytes = s.completedBytes;
+
+    // Pre-plan phases (loader build) have no install plan, so report the loader
+    // build's own cumulative download bytes instead of a fixed 0 B / 0 B.
+    const lb = !plan && s.loaderBytes && s.loaderBytes.total > 0 ? s.loaderBytes : null;
+
+    // With a plan: report overall presence — bytes already cached on disk count
+    // as done against the full plan size — so a fully-cached install shows 100%
+    // / full size instead of a misleading "0 B / 0 B" during post-download phases.
+    const totalBytes = lb ? lb.total : (plan?.totalBytes ?? 0);
+    const effectiveDone = lb ? lb.downloaded : s.completedBytes + (plan?.cachedBytes ?? 0);
     const tasksDone = plan ? plan.pendingFiles - s.pending.size : 0;
-    const speedBps = this.downloadManager.stats().aggregateSpeedBps;
+    const speedBps = lb ? lb.speedBps : this.downloadManager.stats().aggregateSpeedBps;
     const etaSec =
-      speedBps > 0 ? Math.round(Math.max(0, totalBytes - doneBytes) / speedBps) : null;
-    const progressPct = totalBytes > 0 ? (doneBytes / totalBytes) * 100 : s.phase === "READY" ? 100 : 0;
+      speedBps > 0 ? Math.round(Math.max(0, totalBytes - effectiveDone) / speedBps) : null;
+    const progressPct = totalBytes > 0 ? (effectiveDone / totalBytes) * 100 : s.phase === "READY" ? 100 : 0;
 
     return {
       instanceId,
       phase: s.phase,
       instanceStatus: instanceStatusForPhase(s.phase),
       progressPct: Math.min(100, Math.max(0, progressPct)),
-      downloadedBytes: Math.round(doneBytes),
+      downloadedBytes: Math.round(effectiveDone),
       totalBytes,
       speedBps,
       etaSec,

@@ -180,24 +180,28 @@ abstract class InstallerAdapter implements ModLoaderAdapter {
 
   protected abstract fetchVersionList(minecraftVersion: string): Promise<Array<{ version: string }>>;
 
-  async install(minecraftVersion: string, loaderVersion: string): Promise<string> {
+  async install(
+    minecraftVersion: string,
+    loaderVersion: string,
+    onProgress?: (downloadedBytes: number, totalBytes: number) => void,
+  ): Promise<string> {
     const url = this.installerUrl(minecraftVersion, loaderVersion);
     const predicted = this.versionId(minecraftVersion, loaderVersion);
 
     // download installer
     const installerDest = path.join(this.config.downloadsDir, `${this.id}-installer-${predicted}.jar`);
     this.logger.info({ loader: this.id, url }, "downloading loader installer");
-    await this.download(url, installerDest);
+    await this.download(url, installerDest, onProgress);
 
     // Try --installClient first, fall back to zip extraction if it fails
     try {
-      return await this.installViaClient(installerDest, predicted, minecraftVersion);
+      return await this.installViaClient(installerDest, predicted, minecraftVersion, onProgress);
     } catch (err) {
       this.logger.warn(
         { loader: this.id, err },
         "--installClient failed, falling back to installer zip extraction",
       );
-      return await this.installViaZipExtraction(installerDest, predicted, minecraftVersion);
+      return await this.installViaZipExtraction(installerDest, predicted, minecraftVersion, onProgress);
     }
   }
 
@@ -210,6 +214,7 @@ abstract class InstallerAdapter implements ModLoaderAdapter {
     installerDest: string,
     predicted: string,
     _minecraftVersion: string,
+    onProgress?: (downloadedBytes: number, totalBytes: number) => void,
   ): Promise<string> {
     // prepare junction root so the installer writes into the shared dirs
     const root = path.join(this.config.minecraftDir, `${this.id}-install-root`);
@@ -280,7 +285,7 @@ abstract class InstallerAdapter implements ModLoaderAdapter {
       // `.forge_patched_minecraft` marker) exists before we mark the install
       // as validated and ready for launch. Without this, launch preflight
       // fails with "Could not find .forge_patched_minecraft in classloader".
-      await this.ensurePatchedClient(produced);
+      await this.ensurePatchedClient(produced, onProgress);
       if (await this.validate(produced)) {
         this.logger.info({ loader: this.id, versionId: produced }, "loader installed");
         return produced;
@@ -288,7 +293,7 @@ abstract class InstallerAdapter implements ModLoaderAdapter {
       throw new AppError("LOADER_INSTALL_FAILED", `Installer did not produce a usable '${produced}'`);
     }
 
-    await this.ensurePatchedClient(predicted);
+    await this.ensurePatchedClient(predicted, onProgress);
     if (!(await this.validate(predicted))) {
       throw new AppError("LOADER_INSTALL_FAILED", `Installer did not produce '${predicted}'`);
     }
@@ -301,7 +306,10 @@ abstract class InstallerAdapter implements ModLoaderAdapter {
    * install_profile.json when the headless installer didn't produce the jar
    * (newer Forge releases skip the binary patch in --installClient mode).
    */
-  private async ensurePatchedClient(versionId: string): Promise<void> {
+  private async ensurePatchedClient(
+    versionId: string,
+    onProgress?: (downloadedBytes: number, totalBytes: number) => void,
+  ): Promise<void> {
     const versionDir = path.join(this.config.versionsDir, versionId);
     const installProfilePath = path.join(versionDir, "install_profile.json");
     if (!fs.existsSync(installProfilePath)) {
@@ -330,7 +338,7 @@ abstract class InstallerAdapter implements ModLoaderAdapter {
     // Locate client.lzma alongside install_profile (both extracted earlier).
     const clientLzmaPath = path.join(versionDir, "client.lzma");
     if (fs.existsSync(clientLzmaPath)) {
-      await this.patchClientJar(installProfile, minecraftVersion, clientLzmaPath);
+      await this.patchClientJar(installProfile, minecraftVersion, clientLzmaPath, onProgress);
     }
   }
 
@@ -346,23 +354,48 @@ abstract class InstallerAdapter implements ModLoaderAdapter {
     installerDest: string,
     predicted: string,
     minecraftVersion: string,
+    onProgress?: (downloadedBytes: number, totalBytes: number) => void,
   ): Promise<string> {
-    this.logger.info({ loader: this.id }, "extracting version.json from installer zip");
+    this.logger.info({ loader: this.id }, "extracting version profile from installer zip");
 
-    // Try to read version.json from the installer zip
+    // Modern (shim) installers carry version.json at the zip root; classic
+    // pre-1.13 installers embed the same data inside install_profile.json as
+    // `versionInfo` instead. Try the root file first, then fall back.
+    let versionJson: Record<string, unknown> | null = null;
     const versionJsonBuffer = await readZipEntry(installerDest, "version.json");
-    if (!versionJsonBuffer) {
-      throw new AppError(
-        "LOADER_INSTALL_FAILED",
-        `Installer zip does not contain version.json. The installer may be corrupted or in an unexpected format.`,
-      );
+    if (versionJsonBuffer) {
+      try {
+        versionJson = JSON.parse(versionJsonBuffer.toString("utf8"));
+      } catch {
+        versionJson = null;
+      }
+    }
+    if (versionJson === null) {
+      const installProfileBuffer = await readZipEntry(installerDest, "install_profile.json");
+      if (installProfileBuffer) {
+        try {
+          const installProfile = JSON.parse(installProfileBuffer.toString("utf8")) as {
+            versionInfo?: unknown;
+          };
+          const vi = installProfile.versionInfo;
+          if (vi && typeof vi === "object" && !Array.isArray(vi)) {
+            versionJson = vi as Record<string, unknown>;
+            this.logger.info(
+              { loader: this.id },
+              "no root version.json; using versionInfo from install_profile.json",
+            );
+          }
+        } catch {
+          versionJson = null;
+        }
+      }
     }
 
-    let versionJson: Record<string, unknown>;
-    try {
-      versionJson = JSON.parse(versionJsonBuffer.toString("utf8"));
-    } catch {
-      throw new AppError("LOADER_INSTALL_FAILED", "Installer version.json is not valid JSON");
+    if (versionJson === null || typeof versionJson.id !== "string") {
+      throw new AppError(
+        "LOADER_INSTALL_FAILED",
+        `Installer zip does not contain a usable version profile (neither root version.json nor install_profile.json's versionInfo). The installer may be corrupted or in an unexpected format.`,
+      );
     }
 
     // Determine the actual version ID from the extracted JSON
@@ -403,7 +436,7 @@ abstract class InstallerAdapter implements ModLoaderAdapter {
     // Forge-family loaders ship the (emptily-URL'd) client jar as a binary
     // patch against the vanilla game body. Generate it so launch can succeed.
     if (installProfile && clientLzmaPath) {
-      await this.patchClientJar(installProfile, minecraftVersion, clientLzmaPath);
+      await this.patchClientJar(installProfile, minecraftVersion, clientLzmaPath, onProgress);
     }
 
     if (!(await this.validate(actualId))) {
@@ -426,6 +459,7 @@ abstract class InstallerAdapter implements ModLoaderAdapter {
     installProfile: Record<string, unknown>,
     minecraftVersion: string,
     clientLzmaPath: string,
+    onProgress?: (downloadedBytes: number, totalBytes: number) => void,
   ): Promise<void> {
     const processors = (installProfile.processors as Array<Record<string, unknown>> | undefined) ?? [];
     const clientProcessor = processors.find((p) => {
@@ -484,7 +518,7 @@ abstract class InstallerAdapter implements ModLoaderAdapter {
     if (!fs.existsSync(cleanJar)) {
       this.logger.info({ loader: this.id, cleanJar }, "downloading vanilla client jar for binary patching");
       fs.mkdirSync(path.dirname(cleanJar), { recursive: true });
-      const lastErr = await this.downloadFirstTo(clientJarMirrorUrls(minecraftVersion), cleanJar);
+      const lastErr = await this.downloadFirstTo(clientJarMirrorUrls(minecraftVersion), cleanJar, onProgress);
       if (lastErr !== null) {
         throw lastErr instanceof Error ? lastErr : new NotFoundError(`Vanilla client jar '${minecraftVersion}'`);
       }
@@ -495,7 +529,7 @@ abstract class InstallerAdapter implements ModLoaderAdapter {
     const classpathNames = (clientProcessor.classpath as string[] | undefined) ?? [];
     const depDest: string[] = [];
     for (const name of jarName ? [jarName, ...classpathNames] : classpathNames) {
-      depDest.push(await this.downloadMavenJar(name));
+      depDest.push(await this.downloadMavenJar(name, onProgress));
     }
     const toolJar = depDest[0];
     if (!toolJar) {
@@ -573,7 +607,10 @@ abstract class InstallerAdapter implements ModLoaderAdapter {
   }
 
   /** Downloads a maven artifact into the shared library store (mirror-aware). */
-  private async downloadMavenJar(mavenName: string): Promise<string> {
+  private async downloadMavenJar(
+    mavenName: string,
+    onProgress?: (downloadedBytes: number, totalBytes: number) => void,
+  ): Promise<string> {
     const coords = parseMavenName(mavenName);
     if (!coords) {
       throw new AppError("LOADER_INSTALL_FAILED", `Invalid maven coordinate '${mavenName}'`);
@@ -583,7 +620,7 @@ abstract class InstallerAdapter implements ModLoaderAdapter {
     if (fs.existsSync(dest)) return dest;
     const mode = await this.getMirrorMode();
     const canonical = `https://maven.minecraftforge.net/${relPath}`;
-    const lastErr = await this.downloadFirstTo(urlCandidates(canonical, mode), dest);
+    const lastErr = await this.downloadFirstTo(urlCandidates(canonical, mode), dest, onProgress);
     if (lastErr !== null) {
       throw lastErr instanceof Error ? lastErr : new NotFoundError(mavenName);
     }
@@ -594,11 +631,15 @@ abstract class InstallerAdapter implements ModLoaderAdapter {
    * Tries each URL in order until one succeeds, writing the stream to `dest`.
    * Returns `null` on success, or the last error if every candidate failed.
    */
-  private async downloadFirstTo(urls: string[], dest: string): Promise<unknown> {
+  private async downloadFirstTo(
+    urls: string[],
+    dest: string,
+    onProgress?: (downloadedBytes: number, totalBytes: number) => void,
+  ): Promise<unknown> {
     let lastErr: unknown;
     for (const url of urls) {
       try {
-        await this.streamToFile(url, dest);
+        await this.streamToFile(url, dest, onProgress);
         return null;
       } catch (err) {
         lastErr = err;
@@ -642,13 +683,17 @@ abstract class InstallerAdapter implements ModLoaderAdapter {
     }
   }
 
-  private async download(url: string, dest: string): Promise<void> {
+  private async download(
+    url: string,
+    dest: string,
+    onProgress?: (downloadedBytes: number, totalBytes: number) => void,
+  ): Promise<void> {
     const mode = await this.getMirrorMode();
     const candidates = urlCandidates(url, mode);
     let lastError: unknown;
     for (const candidate of candidates) {
       try {
-        await this.streamToFile(candidate, dest);
+        await this.streamToFile(candidate, dest, onProgress);
         return;
       } catch (err) {
         lastError = err;
@@ -658,17 +703,27 @@ abstract class InstallerAdapter implements ModLoaderAdapter {
     throw lastError instanceof Error ? lastError : new NotFoundError(`Installer at ${url}`);
   }
 
-  private async streamToFile(url: string, dest: string): Promise<void> {
+  private async streamToFile(
+    url: string,
+    dest: string,
+    onProgress?: (downloadedBytes: number, totalBytes: number) => void,
+  ): Promise<void> {
     const res = await this.http.openStream(url);
     if (res.status !== 200) {
       res.stream.destroy();
       throw new NotFoundError(`Installer at ${url}`);
     }
+    const total = res.contentLength ?? 0;
     fs.mkdirSync(path.dirname(dest), { recursive: true });
     await new Promise<void>((resolve, reject) => {
       const out = fs.createWriteStream(dest);
+      let downloaded = 0;
       out.on("error", reject);
       res.stream.on("error", reject);
+      res.stream.on("data", (chunk: Buffer) => {
+        downloaded += chunk.length;
+        onProgress?.(downloaded, total);
+      });
       out.on("finish", () => resolve());
       res.stream.pipe(out);
     });
@@ -692,10 +747,18 @@ export class ForgeAdapter extends InstallerAdapter {
   }
 
   versionIdCandidates(minecraftVersion: string, loaderVersion: string): string[] {
-    // Forge changed its version-id scheme for newer Minecraft versions
-    // (1.21.3+): <mc>-forge-<build> ; legacy (<=1.21.1): forge-<mc>-<build>.
-    const build = loaderVersion.includes("-") ? loaderVersion.slice(loaderVersion.indexOf("-") + 1) : loaderVersion;
-    return [`${minecraftVersion}-forge-${build}`, `forge-${minecraftVersion}-${build}`];
+    // Forge changed its version-id scheme over time:
+    //   classic (<=1.12.2): <mc>-forge<mc>-<build>   e.g. 1.12-forge1.12-14.21.1.2443
+    //   legacy  (1.13..1.21.1): forge-<mc>-<build>
+    //   modern  (1.21.3+): <mc>-forge-<build>
+    const build = loaderVersion.includes("-")
+      ? loaderVersion.slice(loaderVersion.indexOf("-") + 1)
+      : loaderVersion;
+    return [
+      `${minecraftVersion}-forge${minecraftVersion}-${build}`,
+      `${minecraftVersion}-forge-${build}`,
+      `forge-${minecraftVersion}-${build}`,
+    ];
   }
 
   protected async fetchVersionList(minecraftVersion: string): Promise<Array<{ version: string }>> {

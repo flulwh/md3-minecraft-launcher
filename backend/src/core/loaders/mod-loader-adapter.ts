@@ -32,8 +32,16 @@ export interface ModLoaderAdapter {
   /**
    * Installs the loader for a Minecraft version.
    * Returns the launcher version-id that instances should reference.
+   *
+   * `onProgress` is invoked while the adapter downloads artifacts (installer
+   * jar, vanilla client jar, maven jars) so the installation UI can render a
+   * live progress bar instead of an indeterminate "0 B / 0 B".
    */
-  install(minecraftVersion: string, loaderVersion: string): Promise<string>;
+  install(
+    minecraftVersion: string,
+    loaderVersion: string,
+    onProgress?: (downloadedBytes: number, totalBytes: number) => void,
+  ): Promise<string>;
 
   uninstall(versionId: string): Promise<void>;
 
