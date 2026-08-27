@@ -7,6 +7,8 @@ import { HttpClient } from "../../infrastructure/http/http-client.js";
 import { AppError, JavaRuntimeNotFoundError, NotFoundError } from "../../errors/index.js";
 import { VersionMetadataStore } from "../version/version-metadata-store.js";
 import { JavaRuntimeManager } from "../java/java-runtime-manager.js";
+import { urlCandidates, MirrorMode } from "../../infrastructure/mirror/mirrors.js";
+import type { SettingsService } from "../../services/settings-service.js";
 import {
   LoaderVersion,
   ModLoaderAdapter,
@@ -100,7 +102,13 @@ abstract class InstallerAdapter implements ModLoaderAdapter {
     protected readonly store: VersionMetadataStore,
     protected readonly javaManager: JavaRuntimeManager,
     protected readonly logger: Logger,
+    private readonly mirrorSettings?: SettingsService,
   ) {}
+
+  private async getMirrorMode(): Promise<MirrorMode> {
+    if (this.mirrorSettings) return this.mirrorSettings.getMirrorMode();
+    return "auto";
+  }
 
   /** e.g. 1.20.1-47.2.0 */
   abstract installerUrl(minecraftVersion: string, loaderVersion: string): string;
@@ -326,6 +334,22 @@ abstract class InstallerAdapter implements ModLoaderAdapter {
   }
 
   private async download(url: string, dest: string): Promise<void> {
+    const mode = await this.getMirrorMode();
+    const candidates = urlCandidates(url, mode);
+    let lastError: unknown;
+    for (const candidate of candidates) {
+      try {
+        await this.streamToFile(candidate, dest);
+        return;
+      } catch (err) {
+        lastError = err;
+        this.logger.debug({ url: candidate, err }, "installer mirror candidate failed");
+      }
+    }
+    throw lastError instanceof Error ? lastError : new NotFoundError(`Installer at ${url}`);
+  }
+
+  private async streamToFile(url: string, dest: string): Promise<void> {
     const res = await this.http.openStream(url);
     if (res.status !== 200) {
       res.stream.destroy();

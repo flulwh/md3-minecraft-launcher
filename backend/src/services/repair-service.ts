@@ -72,7 +72,9 @@ export class RepairService {
 
     // ---- client jar
     this.progress(instanceId, "client", 0, 1);
-    const clientJar = await this.downloads.ensureClientJar(resolved);
+    const clientJar = await this.downloads.ensureClientJar(resolved, {
+      mirrorVersionId: instance.minecraftVersion,
+    });
     const clientOk = fs.existsSync(clientJar) && fs.statSync(clientJar).size > 0;
     this.progress(instanceId, "client", 1, 1);
 

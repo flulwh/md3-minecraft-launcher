@@ -1,75 +1,120 @@
 /**
- * Download source mirroring.
+ * Download source mirroring via BMCLAPI.
  *
- * Official (Global):
- *   https://launchermeta.mojang.com  / https://piston-meta.mojang.com  (manifest + version meta)
- *   https://piston-data.mojang.com   (client jars)
- *   https://libraries.minecraft.net  (libraries)
- *   https://resources.download.minecraft.net (assets)
+ * Reference: https://bmclapidoc.bangbang93.com
  *
- * BMCLAPI (CN mirror, bangbang93.com):
- *   https://bmclapi2.bangbang93.com/mc/game/version_manifest_v2.json
- *   https://bmclapi2.bangbang93.com/...            (meta & data rewrites)
- *   https://bmclapi2.bangbang93.com/maven/...      (libraries)
- *   https://bmclapi2.bangbang93.com/assets/...     (assets)
+ * Mojang official hosts:
+ *   launchermeta.mojang.com / launcher.mojang.com / piston-meta.mojang.com  (manifest + version meta)
+ *   piston-data.mojang.com                                                 (client / server jars)
+ *   libraries.minecraft.net                                                 (libraries)
+ *   resources.download.minecraft.net                                        (assets)
+ *
+ * BMCLAPI path layout (from the docs):
+ *   launchermeta / launcher / piston-meta  -> <base>/            (same path suffix)
+ *   resources.download.minecraft.net       -> <base>/assets
+ *   libraries.minecraft.net                -> <base>/maven
+ *   files.minecraftforge.net/maven         -> <base>/maven
+ *   maven.minecraftforge.net               -> <base>/maven
+ *   maven.neoforged.net/releases           -> <base>/maven
+ *   maven.fabricmc.net                     -> <base>/maven
+ *   meta.fabricmc.net                      -> <base>/fabric-meta
+ *   version/<id>/client                    -> downloadable client jar for the stable game body
+ *
+ * NOTE: piston-data.mojang.com is deliberately NOT rewritten to a generic
+ * path — BMCLAPI exposes no `/v1/objects/<hash>` endpoint. The fast domestic
+ * path for the game jar is `<base>/version/<id>/client` (see download-service).
+ *
+ * On top of `bmclapi2.bangbang93.com` several Chinese university mirrors
+ * (校园网联合镜像站 https://mirrors.cernet.edu.cn/list/bmclapi) fully mirror
+ * BMCLAPI under the `<base>/bmclapi` prefix, e.g. 齐鲁工业大学
+ *   https://mirrors.qlu.edu.cn/bmclapi/maven/net/minecraftforge/forge/
  */
 export type MirrorMode = "auto" | "official" | "bmclapi";
 
 export const BMCLAPI_BASE = "https://bmclapi2.bangbang93.com";
 
+/** BMCLAPI 高校镜像源（均以 /bmclapi 为前缀镜像了完整 BMCLAPI）。 */
+export const BMCLAPI_MIRROR_BASES = [
+  "https://mirrors.qlu.edu.cn/bmclapi",
+  "https://mirror.nju.edu.cn/bmclapi",
+  "https://mirrors.cqu.edu.cn/bmclapi",
+  "https://mirrors.lzu.edu.cn/bmclapi",
+  "https://mirrors.ustc.edu.cn/bmclapi",
+];
+
 export const OFFICIAL_MANIFEST_URLS = [
-  "https://launchermeta.mojang.com/mc/game/version_manifest_v2.json",
   "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json",
+  "https://launchermeta.mojang.com/mc/game/version_manifest_v2.json",
 ];
 
-export const BMCLAPI_MANIFEST_URLS = [
-  `${BMCLAPI_BASE}/mc/game/version_manifest_v2.json`,
-];
-
-interface RewriteRule {
-  pattern: RegExp;
-  replacement: string;
+/** Canonical official prefix -> path suffix under the BMCLAPI mirror root. */
+interface MirrorRule {
+  prefix: string;
+  target: string;
 }
 
-const REWRITE_RULES: RewriteRule[] = [
-  { pattern: /^https:\/\/piston-meta\.mojang\.com\//, replacement: `${BMCLAPI_BASE}/` },
-  { pattern: /^https:\/\/launchermeta\.mojang\.com\//, replacement: `${BMCLAPI_BASE}/` },
-  { pattern: /^https:\/\/launcher\.mojang\.com\//, replacement: `${BMCLAPI_BASE}/` },
-  { pattern: /^https:\/\/piston-data\.mojang\.com\//, replacement: `${BMCLAPI_BASE}/` },
-  { pattern: /^https:\/\/libraries\.minecraft\.net\//, replacement: `${BMCLAPI_BASE}/maven/` },
-  {
-    pattern: /^https:\/\/resources\.download\.minecraft\.net\//,
-    replacement: `${BMCLAPI_BASE}/assets/`,
-  },
+const MIRROR_RULES: MirrorRule[] = [
+  { prefix: "https://launchermeta.mojang.com/", target: "/" },
+  { prefix: "https://launcher.mojang.com/", target: "/" },
+  { prefix: "https://piston-meta.mojang.com/", target: "/" },
+  { prefix: "https://resources.download.minecraft.net/", target: "/assets/" },
+  { prefix: "https://libraries.minecraft.net/", target: "/maven/" },
+  { prefix: "https://maven.minecraftforge.net/", target: "/maven/" },
+  { prefix: "https://files.minecraftforge.net/maven", target: "/maven/" },
+  { prefix: "https://maven.neoforged.net/releases/", target: "/maven/" },
+  { prefix: "https://maven.fabricmc.net/", target: "/maven/" },
+  { prefix: "https://meta.fabricmc.net/", target: "/fabric-meta/" },
+  { prefix: "https://maven.quiltmc.org/repository/release/", target: "/maven/" },
+  { prefix: "https://meta.quiltmc.org/", target: "/quilt-meta/" },
 ];
 
-/** Rewrites a canonical Mojang URL to its BMCLAPI equivalent when possible. */
-export function toMirror(url: string): string | null {
-  for (const rule of REWRITE_RULES) {
-    if (rule.pattern.test(url)) {
-      return url.replace(rule.pattern, rule.replacement);
+/** Returns the BMCLAPI-relative path suffix for a canonical URL, or null. */
+export function mirrorPath(url: string): string | null {
+  for (const rule of MIRROR_RULES) {
+    if (url.startsWith(rule.prefix)) {
+      return `${rule.target}${url.slice(rule.prefix.length)}`;
     }
   }
   return null;
 }
 
+/** Maps a canonical URL to its equivalent on the primary BMCLAPI host. */
+export function toMirror(url: string): string | null {
+  const path = mirrorPath(url);
+  return path === null ? null : `${BMCLAPI_BASE}${path}`;
+}
+
 /**
- * Ordered candidate URLs for a download.
- *   auto    -> official first, mirror fallback
+ * Ordered candidate mirrors for a canonical URL.
+ *   auto    -> official first, mirrors fallback
  *   official-> official only
- *   bmclapi -> mirror first, official fallback
+ *   bmclapi -> BMCLAPI + university mirrors first, official fallback
  */
 export function urlCandidates(url: string, mode: MirrorMode): string[] {
-  const mirrored = toMirror(url);
-  if (mode === "official") return [url];
-  if (mode === "bmclapi") return mirrored !== null ? [mirrored, url] : [url];
+  const path = mirrorPath(url);
+  if (mode === "official" || path === null) return [url];
+
+  const mirrored = [`${BMCLAPI_BASE}${path}`, ...BMCLAPI_MIRROR_BASES.map((b) => `${b}${path}`)];
+  if (mode === "bmclapi") return [...mirrored, url];
   // auto
-  return mirrored !== null ? [url, mirrored] : [url];
+  return [url, ...mirrored];
+}
+
+/** Manifest endpoint: every BMCLAPI base serves the same canonical path. */
+function manifestCandidates(base: string): string[] {
+  return [`${base}/mc/game/version_manifest_v2.json`];
 }
 
 /** Manifest endpoints in preference order for the active mode. */
 export function manifestSources(mode: MirrorMode): string[] {
+  const mirrorHosts = [BMCLAPI_BASE, ...BMCLAPI_MIRROR_BASES];
   if (mode === "official") return OFFICIAL_MANIFEST_URLS;
-  if (mode === "bmclapi") return BMCLAPI_MANIFEST_URLS;
-  return [...OFFICIAL_MANIFEST_URLS, ...BMCLAPI_MANIFEST_URLS];
+  if (mode === "bmclapi") return mirrorHosts.flatMap(manifestCandidates);
+  return [...OFFICIAL_MANIFEST_URLS, ...mirrorHosts.flatMap(manifestCandidates)];
+}
+
+/** Fast domestic candidates for a version's client jar via BMCLAPI. */
+export function clientJarMirrorUrls(versionId: string): string[] {
+  const safe = encodeURIComponent(versionId);
+  return [BMCLAPI_BASE, ...BMCLAPI_MIRROR_BASES].map((b) => `${b}/version/${safe}/client`);
 }

@@ -146,7 +146,7 @@ export class AppContainer {
     this.java = new JavaService(this.javaManager, this.db, this.logger.child({ module: "java-service" }));
 
     // --- loaders (needed by launch + repair to resolve loader version-ids)
-    this.loaders = new LoaderRegistry(config, this.http, this.versionStore, this.javaManager, this.logger.child({ module: "loaders" }));
+    this.loaders = new LoaderRegistry(config, this.http, this.versionStore, this.javaManager, this.logger.child({ module: "loaders" }), this.settings);
 
     // --- instances + launch
     this.instances = new InstanceService(config, this.db, this.bus, this.logger.child({ module: "instances" }));

@@ -8,6 +8,7 @@ import { assertInside } from "../../utils/paths.js";
 import { ManifestVersion, VersionManifestService } from "./version-manifest.js";
 import { versionJsonSchema } from "./schema.js";
 import { VersionJson } from "./types.js";
+import { urlCandidates } from "../../infrastructure/mirror/mirrors.js";
 
 /**
  * Loads raw version JSONs from:
@@ -116,14 +117,24 @@ export class VersionMetadataStore {
   }
 
   private async fetchRemote(entry: ManifestVersion): Promise<VersionJson> {
-    const res = await this.http.getJson<unknown>(entry.url);
-    const parsed = versionJsonSchema.safeParse(res);
-    if (!parsed.success) {
-      throw new Error(
-        `Invalid version JSON for ${entry.id}: ${parsed.error.issues.map((i) => i.message).join(", ")}`,
-      );
+    const mode = await this.manifests.currentMirrorMode();
+    const candidates = urlCandidates(entry.url, mode);
+    let lastError: unknown;
+    for (const candidate of candidates) {
+      try {
+        const res = await this.http.getJson<unknown>(candidate);
+        const parsed = versionJsonSchema.safeParse(res);
+        if (!parsed.success) {
+          throw new Error(
+            `Invalid version JSON for ${entry.id}: ${parsed.error.issues.map((i) => i.message).join(", ")}`,
+          );
+        }
+        return parsed.data as VersionJson;
+      } catch (err) {
+        lastError = err;
+        this.logger?.debug({ url: candidate, err }, "version json mirror candidate failed");
+      }
     }
-    // integrity check against manifest sha1 when we can read the file back
-    return parsed.data as VersionJson;
+    throw lastError instanceof Error ? lastError : new Error(`No reachable source for version JSON ${entry.id}`);
   }
 }

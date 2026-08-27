@@ -103,6 +103,16 @@ export class CachedFetcher {
   invalidateMemory(): void {
     this.memory.clear();
   }
+
+  /** Reads a key directly from the disk cache without hitting the network. */
+  getFromDisk<T>(key: string): T | undefined {
+    return this.disk.get<T>(key);
+  }
+
+  /** Persists a value to the disk cache under the given key (best-effort). */
+  writeDisk<T>(key: string, data: T): void {
+    this.disk.set(key, data);
+  }
 }
 
 export function createCachedFetcher(http: HttpClient, config: AppConfig): CachedFetcher {

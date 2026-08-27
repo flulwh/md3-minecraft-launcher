@@ -81,8 +81,9 @@ export class AssetService {
     if (!existingValid) {
       fs.mkdirSync(path.dirname(indexPath), { recursive: true });
       this.logger.debug({ indexId: indexMeta.id }, "downloading asset index");
+      const mirrorMode = await this.getMirrorMode();
       const outcome = await this.downloads.enqueue({
-        urls: [indexMeta.url],
+        urls: urlCandidates(indexMeta.url, mirrorMode),
         dest: indexPath,
         sha1: indexMeta.sha1,
         size: indexMeta.size,

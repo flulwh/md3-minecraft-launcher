@@ -54,18 +54,29 @@ export class VersionManifestService {
     return this.fallbackMode;
   }
 
+  /** Public accessor so dependent services (e.g. version.json fetching) can build mirror candidates. */
+  async currentMirrorMode(): Promise<MirrorMode> {
+    return this.getMirrorMode();
+  }
+
+  // Shared key that always holds the last known-good manifest, so a switch to
+  // an unreachable mirror falls back to cached data instead of a blank list.
+  private static readonly FALLBACK_KEY = "manifest:v2";
+
   async getManifest(): Promise<VersionManifest> {
     const mode = await this.getMirrorMode();
     let lastError: unknown;
     for (const url of manifestSources(mode)) {
+      const key = `manifest:v2:${url}`;
       try {
-        const { data } = await this.cachedFetcher.getJsonWithCache<unknown>(
-          url,
-          `manifest:v2`,
-          {
-            memoryTtlMs: 5 * 60_000,
-            validate: (raw) => manifestSchema.safeParse(raw).success,
-          },
+        const { data } = await this.cachedFetcher.getJsonWithCache<unknown>(url, key, {
+          memoryTtlMs: 5 * 60_000,
+          validate: (raw) => manifestSchema.safeParse(raw).success,
+        });
+        // Keep the shared copy fresh for cross-mirror fallback.
+        this.cachedFetcher.writeDisk(
+          VersionManifestService.FALLBACK_KEY,
+          data as VersionManifest,
         );
         return data as VersionManifest;
       } catch (err) {
@@ -73,6 +84,12 @@ export class VersionManifestService {
         this.logger.debug({ err, url }, "manifest source failed");
       }
     }
+    // The active mirror is unreachable and has no cache of its own — fall back
+    // to the last known-good manifest so the version list is not empty.
+    const stale = this.cachedFetcher.getFromDisk<VersionManifest>(
+      VersionManifestService.FALLBACK_KEY,
+    );
+    if (stale) return stale;
     throw lastError instanceof Error ? lastError : new Error("Unable to load version manifest");
   }
 

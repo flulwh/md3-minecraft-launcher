@@ -11,7 +11,7 @@ import { AssetService, AssetIndexContent } from "../core/assets/asset-service.js
 import { LibraryResolver } from "../core/libraries/library-resolver.js";
 import { currentRuntime } from "../utils/runtime-env.js";
 import { prepareNatives } from "../core/natives/native-extractor.js";
-import { urlCandidates, MirrorMode } from "../infrastructure/mirror/mirrors.js";
+import { urlCandidates, clientJarMirrorUrls, MirrorMode } from "../infrastructure/mirror/mirrors.js";
 import { assertInside } from "../utils/paths.js";
 import type { SettingsService } from "./settings-service.js";
 
@@ -91,20 +91,54 @@ export class DownloadService {
     return dest;
   }
 
-  async ensureClientJar(resolved: ResolvedVersion): Promise<string> {
+  /**
+   * Ensures the game client jar is present.
+   *
+   * @param mirrorVersionId the canonical Minecraft version id used for the
+   *   BMCLAPI `/version/<id>/client` endpoint. For loader instances (Forge /
+   *   NeoForge) this is the underlying vanilla version (`instance.minecraftVersion`)
+   *   because their client jar IS the vanilla game body; leaving it undefined
+   *   falls back to `resolved.id`.
+   */
+  async ensureClientJar(
+    resolved: ResolvedVersion,
+    opts?: { mirrorVersionId?: string },
+  ): Promise<string> {
     const artifact = resolved.downloads.client;
     const dest = this.clientJarPath(resolved);
+    const mirrorId = opts?.mirrorVersionId ?? resolved.id;
 
     if (!artifact) {
-      // Very old versions ship no downloads block; jar may exist from manual install
+      // Inheritance-based loader whose version json has no own downloads block:
+      // its client jar is the underlying vanilla game body, so fetch it via the
+      // mirror's /version/<id>/client endpoint.
+      if (mirrorId) {
+        await this.runBatch([
+          {
+            urls: clientJarMirrorUrls(mirrorId),
+            dest,
+            kind: "client",
+            context: { version: resolved.id },
+          },
+        ]);
+        return dest;
+      }
       if (fs.existsSync(dest)) return dest;
       throw new Error(`Version '${resolved.id}' provides no client download metadata`);
     }
 
     const mirrorMode = await this.getMirrorMode();
+    // The rest of the manifest lives on Mojang (piston-data has no generic mirror
+    // rule), but the client jar itself is served domestically by BMCLAPI as
+    // /version/<id>/client. Give it priority in mirror mode so loader instances
+    // (Forge etc.) also download the game body fast right after creation.
+    const official = urlCandidates(artifact.url, mirrorMode);
+    const mirrored = clientJarMirrorUrls(mirrorId);
+    const urls =
+      mirrorMode === "bmclapi" ? [...mirrored, ...official] : [...official, ...mirrored];
     await this.runBatch([
       {
-        urls: urlCandidates(artifact.url, mirrorMode),
+        urls,
         dest,
         sha1: artifact.sha1,
         size: artifact.size,
@@ -179,9 +213,11 @@ export class DownloadService {
   /** Full provisioning pipeline used by launch + repair. */
   async provision(
     resolved: ResolvedVersion,
-    opts: { nativesDir: string; deepVerifyAssets?: boolean },
+    opts: { nativesDir: string; deepVerifyAssets?: boolean; mirrorVersionId?: string },
   ): Promise<ProvisionResult> {
-    const clientJar = await this.ensureClientJar(resolved);
+    const clientJar = await this.ensureClientJar(resolved, {
+      mirrorVersionId: opts.mirrorVersionId ?? resolved.id,
+    });
 
     const resolver = new LibraryResolver(this.config);
     const resolution = resolver.resolve(resolved.libraries, currentRuntime());

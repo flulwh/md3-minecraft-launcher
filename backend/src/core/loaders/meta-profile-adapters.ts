@@ -5,6 +5,8 @@ import { Logger } from "../../config/logger.js";
 import { HttpClient } from "../../infrastructure/http/http-client.js";
 import { AppError } from "../../errors/index.js";
 import { VersionMetadataStore } from "../version/version-metadata-store.js";
+import { urlCandidates, MirrorMode } from "../../infrastructure/mirror/mirrors.js";
+import type { SettingsService } from "../../services/settings-service.js";
 import {
   LoaderVersion,
   ModLoaderAdapter,
@@ -35,11 +37,33 @@ abstract class MetaProfileAdapter implements ModLoaderAdapter {
     protected readonly http: HttpClient,
     protected readonly store: VersionMetadataStore,
     protected readonly logger: Logger,
+    private readonly mirrorSettings?: SettingsService,
   ) {}
+
+  private async getMirrorMode(): Promise<MirrorMode> {
+    if (this.mirrorSettings) return this.mirrorSettings.getMirrorMode();
+    return "auto";
+  }
+
+  /** GET JSON from a canonical meta URL, falling back through mirror candidates. */
+  private async fetchJson<T>(url: string): Promise<T> {
+    const mode = await this.getMirrorMode();
+    const candidates = urlCandidates(url, mode);
+    let lastError: unknown;
+    for (const candidate of candidates) {
+      try {
+        return await this.http.getJson<T>(candidate);
+      } catch (err) {
+        lastError = err;
+        this.logger.debug({ url: candidate, err }, "meta mirror candidate failed");
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error(`No reachable meta source for ${url}`);
+  }
 
   async getVersions(minecraftVersion: string): Promise<LoaderVersion[]> {
     const url = `${this.metaBase()}/versions/loader/${encodeURIComponent(minecraftVersion)}`;
-    const entries = await this.http.getJson<MetaLoaderEntry[]>(url);
+    const entries = await this.fetchJson<MetaLoaderEntry[]>(url);
     return entries
       .map((e) => ({
         id: e.loader?.version ?? "",
@@ -62,7 +86,7 @@ abstract class MetaProfileAdapter implements ModLoaderAdapter {
       minecraftVersion,
     )}/${encodeURIComponent(loaderVersion)}/profile/json`;
 
-    const profile = await this.http.getJson<MetaProfileJson>(url);
+    const profile = await this.fetchJson<MetaProfileJson>(url);
     if (!profile.id || !profile.inheritsFrom) {
       throw new AppError("LOADER_INSTALL_FAILED", `${this.displayName}: invalid profile response`);
     }

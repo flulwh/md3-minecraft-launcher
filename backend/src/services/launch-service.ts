@@ -152,7 +152,10 @@ export class LaunchService {
     if (opts.dryRun === true) {
       provisioned = this.previewOnly(resolved, nativesDir);
     } else {
-      provisioned = await this.downloads.provision(resolved, { nativesDir });
+      provisioned = await this.downloads.provision(resolved, {
+        nativesDir,
+        mirrorVersionId: instance.minecraftVersion,
+      });
     }
 
     // ---- Authentication token (after downloads so UI sees progress early)
@@ -187,6 +190,8 @@ export class LaunchService {
       nativesDir,
       classpath: cp.classpath,
       assetsIndexName: resolved.assetIndex?.id ?? resolved.assets ?? "legacy",
+      width: instance.width ?? 854,
+      height: instance.height ?? 480,
       extraVars: parseRecord(instance.gameArgs),
     });
 
@@ -380,6 +385,8 @@ export class LaunchService {
     nativesDir: string;
     classpath: string;
     assetsIndexName: string;
+    width: number;
+    height: number;
     extraVars: Record<string, string>;
   }): VariableMap {
     return {
@@ -397,6 +404,8 @@ export class LaunchService {
       assets_root: this.config.assetsDir,
       assets_index_name: input.assetsIndexName,
       natives_directory: input.nativesDir,
+      resolution_width: String(input.width),
+      resolution_height: String(input.height),
       launcher_name: this.config.env.LAUNCHER_NAME,
       launcher_version: this.config.env.LAUNCHER_VERSION,
       classpath: input.classpath,
