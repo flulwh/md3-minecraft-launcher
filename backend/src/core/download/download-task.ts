@@ -5,6 +5,7 @@ import { EventEmitter } from "node:events";
 import { AppConfig } from "../../config/env.js";
 import { Logger } from "../../config/logger.js";
 import { HttpClient } from "../../infrastructure/http/http-client.js";
+import { sha1File } from "../../utils/hash.js";
 import {
   DownloadKind,
   DownloadRequest,
@@ -152,7 +153,7 @@ export class DownloadTask {
     const partFile = `${this.request.dest}.part`;
     fs.mkdirSync(path.dirname(this.request.dest), { recursive: true });
 
-    if (this.finalFileValid()) {
+    if (await this.finalFileValid()) {
       this.receivedValue = this.request.size ?? fs.statSync(this.request.dest).size;
       this.totalBytesValue = this.receivedValue;
       this.statusValue = "completed";
@@ -367,11 +368,18 @@ export class DownloadTask {
     }
   }
 
-  private finalFileValid(): boolean {
+  private async finalFileValid(): Promise<boolean> {
     try {
       const st = fs.statSync(this.request.dest);
       if (st.size === 0) return false;
       if (this.request.size !== undefined && st.size !== this.request.size) return false;
+      // A size match alone is not enough: a file can be corrupted but same length.
+      // Only trust an existing file when we can verify its SHA1 (when one is
+      // expected), mirroring the verification done on the download path.
+      if (this.request.sha1) {
+        const actual = await sha1File(this.request.dest);
+        if (actual.toLowerCase() !== this.request.sha1.toLowerCase()) return false;
+      }
       return true;
     } catch {
       return false;

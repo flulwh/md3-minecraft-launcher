@@ -105,22 +105,24 @@ export class JavaRuntimeManager {
 
   /**
    * Compatibility fallback used when the version JSON has no javaVersion block.
-   * Deliberately data-driven so it can be extended without code changes.
+   * Canonical Minecraft versions are "M.m.p" ("1.20.4" -> major 1, minor 20);
+   * the leading major is always 1 for modern releases, so the minor segment
+   * drives the Java requirement.
    */
   fallbackMajorFor(versionId: string): number {
     const m = /^(\d+)\.(\d+)/.exec(versionId);
     if (!m) return 8; // pre-1.x era ("a1.2.5", "b1.7.3", "c0.30")
     const major = Number.parseInt(m[1]!, 10);
     const minor = Number.parseInt(m[2]!, 10);
-    const combined = major * 100 + minor;
 
-    if (combined >= 1200 && combined <= 1204) return 17; // 1.20 - 1.20.4
-    if (combined >= 1218) return 21; // 1.21+
-    if (combined >= 1205) return 21; // 1.20.5+
-    if (combined >= 1180) return 17; // 1.18+
-    if (combined >= 1170) return 16; // 1.17
-    if (combined >= 1000) return 8;
-    return 8;
+    // Mojang's official Java requirements (fallback only; the version JSON's
+    // `javaVersion` block normally carries the authoritative value).
+    if (major >= 2) return 21;
+    if (minor >= 21) return 21; // 1.21+
+    if (minor === 20) return 21; // 1.20.5+ needs 21; 21 also runs 1.20 - 1.20.4
+    if (minor >= 18) return 17; // 1.18 - 1.19.x
+    if (minor >= 17) return 16; // 1.17.x
+    return 8; // 1.16 and earlier
   }
 
   private addFromEnv(candidates: Set<string>): void {

@@ -110,6 +110,10 @@ export function extractZipFiltered(
           const outFile = path.join(destDir, entryName);
           fs.mkdirSync(path.dirname(outFile), { recursive: true });
           const writeStream = fs.createWriteStream(outFile);
+          // `pipe` does NOT forward the source stream's errors, so an unhandled
+          // "error" on readStream would throw as an uncaught exception and crash
+          // the whole backend. Route it to `fail` to fail this extraction cleanly.
+          readStream.on("error", fail);
           readStream.pipe(writeStream);
           writeStream.on("error", fail);
           writeStream.on("finish", () => {

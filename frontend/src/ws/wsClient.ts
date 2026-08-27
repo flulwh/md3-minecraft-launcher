@@ -17,6 +17,7 @@ class WsClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private stopped = false;
+  private subscribedInstanceId: string | null = null;
 
   connect(): void {
     if (this.stopped || this.ws !== null) return;
@@ -34,6 +35,10 @@ class WsClient {
       this.attempts = 0;
       wsStore.getState().setConnected(true);
       this.startPing();
+      // Re-assert the subscription after a reconnect: the server resets per-socket state.
+      if (this.subscribedInstanceId !== null) {
+        this.send({ type: "subscribe", instanceId: this.subscribedInstanceId });
+      }
     };
     socket.onmessage = (ev: MessageEvent<string>) => {
       try {
@@ -56,6 +61,7 @@ class WsClient {
     this.stopped = true;
     if (this.reconnectTimer !== null) clearTimeout(this.reconnectTimer);
     if (this.pingTimer !== null) clearInterval(this.pingTimer);
+    this.subscribedInstanceId = null;
     this.ws?.close();
     this.cleanupSocket();
   }
@@ -63,6 +69,24 @@ class WsClient {
   on(handler: WsEventHandler): () => void {
     this.handlers.add(handler);
     return () => this.handlers.delete(handler);
+  }
+
+  /** Filter server events to a single instance. */
+  subscribe(instanceId: string): void {
+    this.subscribedInstanceId = instanceId;
+    this.send({ type: "subscribe", instanceId });
+  }
+
+  /** Revert to receiving events for all instances. */
+  unsubscribe(): void {
+    this.subscribedInstanceId = null;
+    this.send({ type: "unsubscribe" });
+  }
+
+  private send(payload: unknown): void {
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify(payload));
+    }
   }
 
   private startPing(): void {

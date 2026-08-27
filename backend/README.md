@@ -100,8 +100,7 @@ All responses are wrapped: `{ success: true, data }` or
 - `GET /api/v1/health`
 
 ### Accounts / Auth
-- `POST /api/v1/auth/msa/devicecode` — begin Microsoft device-code login.
-- `POST /api/v1/auth/msa/poll` — poll a device-code login.
+- `POST /api/v1/auth/yggdrasil` — LittleSkin / Yggdrasil login (`{ username, password, profileName? }`).
 - `POST /api/v1/auth/offline` — create an offline account (`{ "username": "Steve" }`).
 - `GET  /api/v1/accounts` — list accounts.
 - `GET  /api/v1/accounts/:id` — get a public account.
@@ -176,7 +175,7 @@ ws.on("open", () => ws.send(JSON.stringify({ type: "subscribe", instanceId })));
 
 The engine runs the canonical chain (`src/services/launch-service.ts`):
 
-1. **Validate account** (offline or Microsoft).
+1. **Validate account** (offline or Yggdrasil / LittleSkin).
 2. **Validate instance** + prepare its isolated `.minecraft` directory.
 3. **Resolve version** — merge `inheritsFrom` metadata (libraries, arguments,
    main class, asset index, java requirement) into a single resolved version.

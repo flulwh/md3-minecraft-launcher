@@ -149,6 +149,16 @@ export class MinecraftProcessManager {
       this.logger.info({ sessionId: opts.sessionId, code }, "minecraft exited");
     });
 
+    // Retire the (now-exited) session after a short retention window so UI
+    // consumers can still observe the terminal state without the map growing
+    // unbounded for long-running processes.
+    child.on("close", () => {
+      const timer = setTimeout(() => {
+        if (this.sessions.get(opts.sessionId) === proc) this.sessions.delete(opts.sessionId);
+      }, 60_000);
+      timer.unref?.();
+    });
+
     // Consider the game "running" once it survives the immediate-failure window.
     setTimeout(() => {
       if (this.sessions.get(opts.sessionId) === proc && proc.status === "starting") {

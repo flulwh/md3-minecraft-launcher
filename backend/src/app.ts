@@ -30,8 +30,18 @@ export async function buildApp(c: AppContainer): Promise<FastifyInstance> {
     bodyLimit: 1024 * 1024,
   });
 
+  const allowedOrigins = (c.config.env.CORS_ORIGINS ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
   void app.register(cors, {
-    origin: true, // Electron renderer + dev servers
+    // Allow-list only: never reflect arbitrary Origins (blocks drive-by access
+    // to the local API from malicious web pages). "null" covers file:// pages
+    // from a packaged Electron renderer.
+    origin: (origin, cb) => {
+      cb(null, !origin || allowedOrigins.includes(origin));
+    },
     methods: ["GET", "POST", "PATCH", "PUT", "DELETE"],
   });
 

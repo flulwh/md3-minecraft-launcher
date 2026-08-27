@@ -14,7 +14,7 @@ import Tabs from "@mui/material/Tabs";
 import TextField from "@mui/material/TextField";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import type { InstanceDto } from "../api/types";
 import { AppIcon } from "../design-system/AppIcon";
@@ -24,6 +24,7 @@ import { LoaderChip } from "../design-system/LoaderChip";
 import { StateView } from "../design-system/StateView";
 import { LogViewer } from "../components/LogViewer";
 import { LaunchButton } from "../components/LaunchButton";
+import { wsClient } from "../ws/wsClient";
 import {
   useDeleteInstance,
   useInstance,
@@ -52,6 +53,14 @@ export function InstanceDetailPage() {
         : "overview",
   );
   const [confirmDelete, setConfirmDelete] = useState(false);
+
+  // Filter the WS event stream to this instance while the detail page is open.
+  useEffect(() => {
+    if (!id) return;
+    wsClient.subscribe(id);
+    return () => wsClient.unsubscribe();
+  }, [id]);
+
   const deleteInstance = useDeleteInstance();
   const phase = launchStore((s) => (id ? (s.byInstance[id]?.phase ?? "idle") : "idle"));
   const runningLike = ["running", "launching", "preparing", "downloading"].includes(phase);

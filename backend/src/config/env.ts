@@ -31,6 +31,14 @@ const EnvSchema = z.object({
   HTTP_TIMEOUT_MS: z.coerce.number().int().min(1000).default(30_000),
   /** auto = official first with BMCLAPI fallback; bmclapi = CN mirror first */
   MIRROR: z.enum(["auto", "official", "bmclapi"]).default("auto"),
+  /**
+   * Comma-separated allow-list of CORS origins for the local REST API.
+   * "null" is sent by file:// (packaged Electron renderer) pages. Anything
+   * not listed here is blocked — the server never reflects arbitrary origins.
+   */
+  CORS_ORIGINS: z
+    .string()
+    .default("http://127.0.0.1:5173,http://localhost:5173,null"),
 });
 
 export type Env = z.infer<typeof EnvSchema>;

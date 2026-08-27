@@ -257,7 +257,26 @@ export class LaunchService {
       },
     });
 
-    const proc = await this.processes.start({ sessionId, instanceId: instance.id, command });
+    // If spawn fails (e.g. missing cwd / java), mark the session as crashed
+    // instead of leaving it permanently stuck in "starting".
+    let proc: Awaited<ReturnType<MinecraftProcessManager["start"]>>;
+    try {
+      proc = await this.processes.start({ sessionId, instanceId: instance.id, command });
+    } catch (err) {
+      try {
+        await this.db.client.launchSession.update({
+          where: { id: sessionId },
+          data: {
+            status: "crashed",
+            endedAt: new Date(),
+            crashReason: err instanceof Error ? err.message : "launch failed",
+          },
+        });
+      } catch {
+        /* best effort; surface the original spawn error below */
+      }
+      throw err;
+    }
     await this.db.client.launchSession.update({
       where: { id: sessionId },
       data: { pid: proc.pid, status: "running" },

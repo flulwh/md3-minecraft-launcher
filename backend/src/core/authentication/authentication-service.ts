@@ -172,7 +172,7 @@ export class AuthenticationService {
     const clientToken = this.decryptToken(row.clientToken);
 
     if (!(await this.yggdrasil.validate(accessToken, clientToken))) {
-      const refreshed = await this.refreshAndPersist(row, accessToken, clientToken, profile.id);
+      const refreshed = await this.refreshAndPersist(row, accessToken, clientToken, profile);
       const token = { token: refreshed.token, name: profile.name, uuid: profile.id };
       this.tokenCache.set(accountId, token);
       return token;
@@ -189,11 +189,11 @@ export class AuthenticationService {
     row: Account & { profiles: Array<{ id: string; name: string }> },
     accessToken: string,
     clientToken: string,
-    profileId: string,
+    profile: { id: string; name: string },
   ): Promise<{ token: string }> {
     let refreshed;
     try {
-      refreshed = await this.yggdrasil.refresh(accessToken, clientToken, profileId);
+      refreshed = await this.yggdrasil.refresh(accessToken, clientToken, profile.id);
     } catch (err) {
       this.logger.warn({ account: row.id, err }, "yggdrasil refresh failed; login required");
       throw new AuthError("登录凭据已失效，请重新登录");
@@ -208,12 +208,14 @@ export class AuthenticationService {
       },
     });
     if (refreshed.profileId && row.profiles.length > 1) {
+      // Update the *active* profile (not necessarily row.profiles[0]) so a
+      // multi-profile account marks the correct character as isActive.
       await this.db.client.account.update({
         where: { id: row.id },
         data: {
           profiles: {
             update: {
-              where: { accountId_name: { accountId: row.id, name: row.profiles[0]!.name } },
+              where: { accountId_name: { accountId: row.id, name: profile.name } },
               data: { id: normalizeUuid(refreshed.profileId), isActive: true },
             },
           },

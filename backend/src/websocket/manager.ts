@@ -54,7 +54,6 @@ export class WebSocketManager {
     });
 
     const closeHandler = (): void => {
-      socket.removeEventListener("message", closeHandler);
       socket.removeEventListener("close", closeHandler);
       socket.removeEventListener("error", closeHandler);
       this.clients.delete(socket);

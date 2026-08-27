@@ -47,9 +47,6 @@ interface LaunchStore {
 
 let launchStartAt = 0;
 
-const terminalOrIdle = (s: InstanceLaunchState): boolean =>
-  ["idle", "stopped", "crashed"].includes(s.phase);
-
 export const launchStore = create<LaunchStore>((set, getState) => ({
   byInstance: {},
   get: (instanceId) => getState().byInstance[instanceId] ?? idleState(),
@@ -93,12 +90,15 @@ export const launchStore = create<LaunchStore>((set, getState) => ({
   },
   onExit: (instanceId, sessionId, exitCode) => {
     const s = getState().get(instanceId);
-    if (s.sessionId !== sessionId && !terminalOrIdle(s)) return;
+    // Only ever honor the exit for the session this instance is tracking.
+    // This blocks stale / out-of-order exit events from flipping an already
+    // idle instance back to "stopped".
+    if (s.sessionId !== sessionId) return;
     getState().patch(instanceId, { phase: "stopped", exitCode, error: null });
   },
   onCrash: (instanceId, sessionId, reason, exitCode) => {
     const s = getState().get(instanceId);
-    if (s.sessionId !== sessionId && !terminalOrIdle(s)) return;
+    if (s.sessionId !== sessionId) return;
     getState().patch(instanceId, { phase: "crashed", crashReason: reason, exitCode: exitCode ?? null });
   },
   noteDownloadActivity: () => {
