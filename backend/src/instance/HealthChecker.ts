@@ -182,9 +182,9 @@ export class HealthChecker {
 
     // ---- Mods / Saves
     const gameDir = this.instances.gameDirectory(instanceId);
-    const { total: modCount, disabled } = countMods(path.join(gameDir, "mods"));
-    const saveInfo = dirSize(path.join(gameDir, "saves"));
-    const saveCount = countSubdirs(path.join(gameDir, "saves"));
+    const { total: modCount, disabled } = await countMods(path.join(gameDir, "mods"));
+    const saveInfo = await dirSize(path.join(gameDir, "saves"));
+    const saveCount = await countSubdirs(path.join(gameDir, "saves"));
     categories.push({ id: "mods", label: "Mods", status: "ok", message: `启用 ${modCount - disabled} 个 / 禁用 ${disabled} 个` });
     categories.push({ id: "saves", label: "存档", status: saveCount > 0 ? "ok" : "warn", message: saveCount > 0 ? `${saveCount} 个世界` : "暂无存档" });
 
@@ -214,17 +214,17 @@ export class HealthChecker {
 
     const breakdown: DiskBreakdown[] = [];
     for (const name of ["saves", "mods", "config", "resourcepacks", "shaderpacks", "screenshots"]) {
-      const info = dirSize(path.join(gameDir, name));
+      const info = await dirSize(path.join(gameDir, name));
       if (info.fileCount > 0 || info.sizeBytes > 0) breakdown.push({ name, ...info });
     }
     // Everything else directly under the game directory (e.g. logs, server.properties).
-    const other = dirSizeExcept(gameDir, ["saves", "mods", "config", "resourcepacks", "shaderpacks", "screenshots"]);
+    const other = await dirSizeExcept(gameDir, ["saves", "mods", "config", "resourcepacks", "shaderpacks", "screenshots"]);
     if (other.fileCount > 0 || other.sizeBytes > 0) breakdown.push({ name: "other", ...other });
 
     const totalSizeBytes = breakdown.reduce((sum, b) => sum + b.sizeBytes, 0);
     const backupCount = await this.db.client.instanceBackup.count({ where: { instanceId } });
     const saves = breakdown.find((b) => b.name === "saves");
-    const saveCount = countSubdirs(path.join(gameDir, "saves"));
+    const saveCount = await countSubdirs(path.join(gameDir, "saves"));
 
     return {
       instanceId,
@@ -286,11 +286,16 @@ function reasonFor(file: string): CorruptFile["reason"] {
   return "sha1";
 }
 
-function countMods(modsDir: string): { total: number; disabled: number } {
-  if (!fs.existsSync(modsDir)) return { total: 0, disabled: 0 };
+async function countMods(modsDir: string): Promise<{ total: number; disabled: number }> {
   let total = 0;
   let disabled = 0;
-  for (const entry of fs.readdirSync(modsDir, { withFileTypes: true })) {
+  let entries;
+  try {
+    entries = await fs.promises.readdir(modsDir, { withFileTypes: true });
+  } catch {
+    return { total: 0, disabled: 0 };
+  }
+  for (const entry of entries) {
     if (!entry.isFile()) continue;
     if (entry.name.endsWith(".disabled") || entry.name.endsWith(".DISABLED")) {
       disabled += 1;
@@ -302,30 +307,41 @@ function countMods(modsDir: string): { total: number; disabled: number } {
   return { total, disabled };
 }
 
-function countSubdirs(dir: string): number {
-  if (!fs.existsSync(dir)) return 0;
+async function countSubdirs(dir: string): Promise<number> {
   let count = 0;
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+  let entries;
+  try {
+    entries = await fs.promises.readdir(dir, { withFileTypes: true });
+  } catch {
+    return 0;
+  }
+  for (const entry of entries) {
     if (entry.isDirectory()) count += 1;
   }
   return count;
 }
 
-function dirSize(dir: string): DirInfo {
-  if (!fs.existsSync(dir)) return { sizeBytes: 0, fileCount: 0 };
+async function dirSize(dir: string): Promise<DirInfo> {
   let sizeBytes = 0;
   let fileCount = 0;
-  const walk = (p: string): void => {
-    for (const entry of fs.readdirSync(p, { withFileTypes: true })) {
+  const walk = async (p: string): Promise<void> => {
+    let entries;
+    try {
+      entries = await fs.promises.readdir(p, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
       const full = path.join(p, entry.name);
       if (entry.isDirectory()) {
-        walk(full);
+        await walk(full);
       } else if (entry.isSymbolicLink()) {
         // Skip symlinks to avoid following out of the sandbox or cycles.
         continue;
       } else {
         try {
-          sizeBytes += fs.statSync(full).size;
+          const st = await fs.promises.stat(full);
+          sizeBytes += st.size;
           fileCount += 1;
         } catch {
           /* unreadable file — count it as 0 bytes */
@@ -333,25 +349,31 @@ function dirSize(dir: string): DirInfo {
       }
     }
   };
-  walk(dir);
+  await walk(dir);
   return { sizeBytes, fileCount };
 }
 
-function dirSizeExcept(dir: string, exclude: string[]): DirInfo {
-  if (!fs.existsSync(dir)) return { sizeBytes: 0, fileCount: 0 };
+async function dirSizeExcept(dir: string, exclude: string[]): Promise<DirInfo> {
   let sizeBytes = 0;
   let fileCount = 0;
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+  let entries;
+  try {
+    entries = await fs.promises.readdir(dir, { withFileTypes: true });
+  } catch {
+    return { sizeBytes, fileCount };
+  }
+  for (const entry of entries) {
     if (exclude.includes(entry.name)) continue;
     if (entry.isDirectory() && !entry.isSymbolicLink()) {
-      const info = dirSize(path.join(dir, entry.name));
+      const info = await dirSize(path.join(dir, entry.name));
       sizeBytes += info.sizeBytes;
       fileCount += info.fileCount;
     } else if (entry.isSymbolicLink()) {
       continue;
     } else {
       try {
-        sizeBytes += fs.statSync(path.join(dir, entry.name)).size;
+        const st = await fs.promises.stat(path.join(dir, entry.name));
+        sizeBytes += st.size;
         fileCount += 1;
       } catch {
         /* unreadable file */

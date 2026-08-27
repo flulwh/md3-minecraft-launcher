@@ -7,6 +7,7 @@ import { EventBus, Events } from "../websocket/events.js";
 import { AppError, NotFoundError, SandboxViolationError } from "../errors/index.js";
 import { InstanceService } from "../services/instance-service.js";
 import { resolveInside, assertInside } from "../utils/paths.js";
+import { ExtractBudget } from "../utils/zip-safety.js";
 
 export type BackupKind = "manual" | "prelaunch" | "postlaunch" | "auto" | "beforeDelete";
 
@@ -117,7 +118,9 @@ export class BackupManager {
     const zip = new AdmZip(src);
     const entries = zip.getEntries();
     let fileEntries = 0;
+    const budget = new ExtractBudget();
     for (const entry of entries) {
+      budget.reserve(entry);
       const safe = resolveInside(target, entry.entryName);
       if (entry.isDirectory) {
         fs.mkdirSync(safe, { recursive: true });

@@ -6,6 +6,7 @@ import { EventBus, Events } from "../websocket/events.js";
 import { InstanceService, InstanceDto } from "../services/instance-service.js";
 import { ValidationError, AppError } from "../errors/index.js";
 import { resolveInside } from "../utils/paths.js";
+import { ExtractBudget } from "../utils/zip-safety.js";
 
 export interface ImportOptions {
   name?: string;
@@ -102,9 +103,11 @@ export class ImportManager {
     const instanceRoot = this.instanceRoot(matched.id);
 
     let fileCount = 0;
+    const budget = new ExtractBudget();
     for (const entry of entries) {
       const rel = entry.entryName.replace(/\\/g, "/").replace(/^(\.\/)+/, "");
       if (rel === "pack.json" || rel === "") continue;
+      budget.reserve(entry);
       const safe = resolveInside(instanceRoot, rel);
       if (entry.isDirectory) {
         fs.mkdirSync(safe, { recursive: true });
@@ -141,9 +144,11 @@ export class ImportManager {
     const gameRoot = this.instances.gameDirectory(matched.id);
     fs.mkdirSync(gameRoot, { recursive: true });
     let fileCount = 0;
+    const budget = new ExtractBudget();
     for (const entry of entries) {
       const raw = entry.entryName.replace(/\\/g, "/").replace(/^(\.\/)+/, "");
       if (!raw.startsWith("overrides/") || raw === "overrides") continue;
+      budget.reserve(entry);
       const rel = raw.replace(/^overrides\//, "");
       const safe = resolveInside(gameRoot, rel);
       if (entry.isDirectory) {
