@@ -389,8 +389,8 @@ function versionCount(list: MarketVersion[]): number {
 }
 
 function friendlyError(code: string, message: string): string {
-  if (code === "VALIDATION_ERROR" || code === "Already_Installed") return "该文件已安装到此实例";
-  if (message === "Already installed") return "该文件已安装到此实例";
-  if (code === "DOWNLOAD_ERROR") return `下载失败：${message}`;
+  if (message.includes("Already installed")) return "该文件已安装到此实例";
+  if (code === "CHECKSUM_MISMATCH") return `校验失败：${message}`;
+  if (code === "DOWNLOAD_FAILED") return `下载失败：${message}`;
   return message || "安装失败";
 }
