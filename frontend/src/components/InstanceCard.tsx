@@ -12,6 +12,7 @@ import type { InstanceDto } from "../api/types";
 import { AppIcon } from "../design-system/AppIcon";
 import { ConfirmDialog } from "../design-system/ConfirmDialog";
 import { LoaderChip } from "../design-system/LoaderChip";
+import { AccountChip } from "./AccountChip";
 import { useDeleteInstance, useDeleteSummary, useDuplicateInstance, useExportInstance, useUpdateInstance } from "../hooks/queries";
 import { previewLaunch, startLaunch, stopSession } from "../lib/actions";
 import { fmtBytes, fmtRelative, loaderLabel } from "../lib/format";
@@ -95,8 +96,20 @@ export function InstanceCard({ instance, lastPlayedAt, onEdit }: InstanceCardPro
 
         <Box sx={{ display: "flex", alignItems: "center", gap: 0.75, flexWrap: "wrap" }}>
           <LoaderChip loader={instance.loader} version={null} />
+          <AccountChip instanceId={instance.id} />
           {instance.status === "BROKEN" && (
-            <Chip size="small" color="error" label="需修复" />
+            <Chip
+              size="small"
+              color="error"
+              icon={<AppIcon name="build" size={13} filled />}
+              clickable
+              label="需修复"
+              title="点击进入修复入口"
+              onClick={(e) => {
+                e.stopPropagation();
+                navigate(`/instances/${instance.id}?tab=settings`);
+              }}
+            />
           )}
           {instance.status === "CREATED" && (
             <Chip size="small" color="warning" label="未安装" />

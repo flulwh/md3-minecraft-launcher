@@ -23,6 +23,8 @@ export interface ProvisionResult {
   assetIndex: AssetIndexContent | null;
   downloaded: number;
   failed: number;
+  /** Asset objects the user paused mid-download; install must wait for resume. */
+  paused: number;
 }
 
 /**
@@ -206,7 +208,7 @@ export class DownloadService {
     index: AssetIndexContent,
     indexId: string,
     opts?: { deepVerify?: boolean },
-  ): Promise<{ completed: number; failed: number }> {
+  ): Promise<{ completed: number; failed: number; paused: number }> {
     return this.assets.ensureAssets(index, indexId, opts);
   }
 
@@ -235,7 +237,7 @@ export class DownloadService {
             indexId,
             opts.deepVerifyAssets === true ? { deepVerify: true } : {},
           )
-        : { completed: 0, failed: 0 };
+        : { completed: 0, failed: 0, paused: 0 };
 
     return {
       clientJar,
@@ -245,6 +247,7 @@ export class DownloadService {
       assetIndex,
       downloaded: assetStats.completed,
       failed: assetStats.failed,
+      paused: assetStats.paused,
     };
   }
 
@@ -268,19 +271,24 @@ export class DownloadService {
     return this.downloads.resume(taskId);
   }
 
-  private async runBatch(requests: DownloadRequest[]): Promise<void> {
-    if (requests.length === 0) return;
+  /**
+   * Enqueues a batch and awaits it. Failures throw BatchDownloadError (with the
+   * full list); a user-paused task is NOT a failure — it is reported via the
+   * returned count so the install manager can hold the install in PAUSED.
+   */
+  private async runBatch(requests: DownloadRequest[]): Promise<number> {
+    if (requests.length === 0) return 0;
     const outcomes = requests.map((r) => this.downloads.enqueue(r).outcome);
     const results = await Promise.all(outcomes);
-    const failures = results.filter(
-      (r: TaskOutcome) => r.status !== "completed",
-    );
+    const failures = results.filter((r: TaskOutcome) => r.status === "failed");
+    const paused = results.filter((r: TaskOutcome) => r.status === "paused").length;
     if (failures.length > 0) {
       throw new BatchDownloadError(failures.map((r) => ({
         dest: r.snapshot.dest,
         error: r.snapshot.error ?? r.status,
       })));
     }
+    return paused;
   }
 }
 

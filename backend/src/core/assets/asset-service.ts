@@ -175,7 +175,7 @@ export class AssetService {
     index: AssetIndexContent,
     indexId: string,
     opts?: { deepVerify?: boolean },
-  ): Promise<{ completed: number; failed: number }> {
+  ): Promise<{ completed: number; failed: number; paused: number }> {
     // Optional full integrity pass (used by repair).
     if (opts?.deepVerify) {
       await this.deepVerifyAndPrune(index);
@@ -192,8 +192,14 @@ export class AssetService {
     if (batch.failed > 0) {
       this.logger.error({ failed: batch.failed }, "some assets failed to download");
     }
+    if (batch.paused > 0) {
+      this.logger.info(
+        { paused: batch.paused, indexId },
+        "some assets are paused by the user; install must wait for resume",
+      );
+    }
 
-    return { completed: batch.completed, failed: batch.failed };
+    return { completed: batch.completed, failed: batch.failed, paused: batch.paused };
   }
 
   private needsVirtualLayout(index: AssetIndexContent): boolean {

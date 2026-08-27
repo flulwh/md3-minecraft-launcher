@@ -33,6 +33,9 @@ import { MEMORY_PRESETS_MB } from "../theme/tokens";
 
 const filterLimit = createFilterOptions<ManifestVersion>({ limit: 120 });
 
+/** Memory flags configured via the dedicated slider; reject them in free-text JVM args (#5). */
+const MEMORY_JVM_RE = /^-X(?:mx|ms|ss)[0-9.]+[kmgt]?$/i;
+
 export interface CreateInstanceDialogProps {
   open: boolean;
   onClose: () => void;
@@ -94,7 +97,20 @@ export function CreateInstanceDialog({ open, onClose, onCreated }: CreateInstanc
     setLoaderVersion(null);
   }, [loader, version?.id]);
 
-  const canSubmit = Boolean(name.trim() && version && (loader === "vanilla" || loaderVersion));
+  // Detect -Xmx/-Xms/-Xss in the free-text JVM args so the user sees a clear
+  // conflict with the "最大内存" slider instead of an unpredictable override (#5).
+  const jvmMemoryConflict = useMemo(() => {
+    if (!jvmArgsText.trim()) return null;
+    return (
+      jvmArgsText
+        .split("\n")
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .find((s) => MEMORY_JVM_RE.test(s)) ?? null
+    );
+  }, [jvmArgsText]);
+
+  const canSubmit = Boolean(name.trim() && version && (loader === "vanilla" || loaderVersion) && !jvmMemoryConflict);
 
   const submit = (): void => {
     if (!version) return;
@@ -199,7 +215,18 @@ export function CreateInstanceDialog({ open, onClose, onCreated }: CreateInstanc
 
         {loader !== "vanilla" && (
           <FormRow label="加载器版本">
-            {loaderVersions.isLoading ? (
+            {!version ? (
+              <Autocomplete
+                size="small"
+                disabled
+                options={[]}
+                value={null}
+                onChange={() => undefined}
+                renderInput={(params) => (
+                  <TextField {...params} placeholder="请先选择 Minecraft 版本" disabled helperText="请先选择 Minecraft 版本，再选择加载器版本" />
+                )}
+              />
+            ) : loaderVersions.isLoading ? (
               <Alert severity="info" icon={<span />}>正在获取 {loader} 版本列表…</Alert>
             ) : (
               <Autocomplete
@@ -210,7 +237,7 @@ export function CreateInstanceDialog({ open, onClose, onCreated }: CreateInstanc
                 renderInput={(params) => (
                   <TextField
                     {...params}
-                    placeholder={loaderVersions.data?.versions.length === 0 ? `未找到适用于 ${version?.id} 的版本` : "选择加载器版本"}
+                    placeholder={loaderVersions.data?.versions.length === 0 ? `未找到适用于 ${version.id} 的版本` : "选择加载器版本"}
                     error={loaderVersions.data?.versions.length === 0}
                     helperText={
                       loaderVersions.data?.versions.length === 0
@@ -247,7 +274,21 @@ export function CreateInstanceDialog({ open, onClose, onCreated }: CreateInstanc
         </FormRow>
 
         <FormRow label="Java 运行时" htmlFor="ci-java">
-          <TextField id="ci-java" select size="small" fullWidth value={javaPath} onChange={(e) => setJavaPath(e.target.value)}>
+          <TextField
+            id="ci-java"
+            select
+            size="small"
+            fullWidth
+            value={javaPath}
+            onChange={(e) => setJavaPath(e.target.value)}
+            helperText={
+              java.isLoading
+                ? "正在扫描已安装的 Java…"
+                : (java.data ?? []).length === 0
+                  ? "未检测到 Java，可到「设置 → Java 运行时」手动添加可执行文件路径（如 …\\bin\\java.exe）"
+                  : undefined
+            }
+          >
             <MenuItem value="">自动选择（按版本要求）</MenuItem>
             {(java.data ?? []).map((rt) => (
               <MenuItem key={rt.path} value={rt.path}>
@@ -277,8 +318,22 @@ export function CreateInstanceDialog({ open, onClose, onCreated }: CreateInstanc
             <FormRow label="自动连接服务器" description="可选，启动后直接进入该服务器">
               <TextField size="small" fullWidth placeholder="mc.example.com" value={serverIp} onChange={(e) => setServerIp(e.target.value)} />
             </FormRow>
-            <FormRow label="额外 JVM 参数" description="每行一条，例如 -XX:+UseG1GC">
-              <TextField size="small" fullWidth multiline rows={3} value={jvmArgsText} onChange={(e) => setJvmArgsText(e.target.value)} placeholder={"-XX:+UseG1GC\n-Dfml.ignoreInvalidMinecraftCertificates=true"} />
+            <FormRow label="额外 JVM 参数" description="每行一条。内存请用上方「最大内存」滑块设置，不要在此填写 -Xmx/-Xms">
+              <TextField
+                size="small"
+                fullWidth
+                multiline
+                rows={3}
+                value={jvmArgsText}
+                onChange={(e) => setJvmArgsText(e.target.value)}
+                error={Boolean(jvmMemoryConflict)}
+                helperText={
+                  jvmMemoryConflict
+                    ? `「${jvmMemoryConflict}」与「最大内存」设置冲突，请勿重复填写内存参数`
+                    : undefined
+                }
+                placeholder={"-XX:+UseG1GC\n-Dfml.ignoreInvalidMinecraftCertificates=true"}
+              />
             </FormRow>
           </AccordionDetails>
         </Accordion>

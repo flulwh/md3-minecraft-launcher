@@ -43,11 +43,14 @@ function VersionRow({
   onInstall,
   installing,
   installed,
+  updating,
 }: {
   v: MarketVersion;
   onInstall: (v: MarketVersion) => void;
   installing: boolean;
   installed: boolean;
+  /** Project is already installed under a different version — the button becomes "update". */
+  updating: boolean;
 }) {
   return (
     <Box sx={{ p: 1.5, display: "flex", flexDirection: "column", gap: 0.75 }}>
@@ -72,7 +75,7 @@ function VersionRow({
           }
           onClick={() => onInstall(v)}
         >
-          {installing ? "安装中…" : installed ? "已安装" : "安装"}
+          {installing ? "安装中…" : installed ? "已安装" : updating ? "更新到该版本" : "安装"}
         </Button>
       </Box>
       <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, flexWrap: "wrap" }}>
@@ -147,9 +150,13 @@ export function MarketDetailPage() {
   }
   const hidingSome = !showAll && versionCount(versions ?? []) !== compatible.length;
 
-  const installedNames = new Set(
+  const installedVersionNames = new Set(
     (installed ?? []).filter((e) => e.provider === "modrinth").map((e) => e.versionName),
   );
+  // Installed-state matching is per-project (UX #2): browsing another version of
+  // an installed project should offer "update to this version", not "install".
+  const projectInstalled =
+    id !== undefined && (installed ?? []).some((e) => e.provider === "modrinth" && e.projectId === id);
 
   const runInstall = (v: MarketVersion, instanceId: string, instanceName: string): void => {
     if (!id) return;
@@ -342,7 +349,8 @@ export function MarketDetailPage() {
                     <VersionRow
                       v={v}
                       installing={installMutation.isPending && pending?.id === v.id}
-                      installed={installedNames.has(v.versionName)}
+                      installed={installedVersionNames.has(v.versionName)}
+                      updating={projectInstalled && !installedVersionNames.has(v.versionName)}
                       onInstall={onInstallClick}
                     />
                   </Box>

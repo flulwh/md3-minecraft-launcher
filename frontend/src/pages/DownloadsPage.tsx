@@ -118,11 +118,26 @@ export function DownloadsPage() {
         }
         empty={filtered.length === 0}
         emptyIcon="cloud_off"
-        emptyTitle={tasks.length === 0 ? "暂无下载任务" : "没有匹配的任务"}
+        emptyTitle={
+          tasks.length === 0
+            ? "暂无下载任务"
+            : statusFilter === "downloading"
+              ? "当前没有进行中的下载"
+              : "没有匹配的任务"
+        }
         emptyDescription={
           tasks.length === 0
             ? "启动实例或修复游戏时，文件下载任务会实时显示在这里"
-            : undefined
+            : statusFilter === "downloading"
+              ? "所有下载任务都已完成，历史记录仍保留在「已完成」中，不会丢失"
+              : undefined
+        }
+        emptyAction={
+          statusFilter === "downloading" && tasks.length > 0 ? (
+            <Button variant="contained" onClick={() => setStatusFilter("completed")}>
+              查看已完成下载
+            </Button>
+          ) : undefined
         }
       >
         <Paper sx={{ overflow: "hidden" }} role="list">

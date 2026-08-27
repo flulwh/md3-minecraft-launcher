@@ -348,6 +348,17 @@ export class InstallationManager {
       }
       throw err;
     }
+    // A file the user paused from the Downloads page must hold the install:
+    // resume those files (or click 继续) before we may proceed to READY.
+    const pausedAfterProvision = this.pausedPendingCount(s);
+    if (pausedAfterProvision > 0) {
+      this.setStage(
+        s,
+        `安装被暂停：${pausedAfterProvision} 个文件已在下载页面暂停。请先在下载页恢复这些文件，再点击「继续」完成安装。`,
+      );
+      this.setPhase(instanceId, s, instance.id, "PAUSED");
+      return;
+    }
     if (!(await this.yieldIfStop(instanceId, s))) return;
 
     // INSTALLING: instance-scoped auto-dependencies (Fabric API, QSL, ...).
@@ -362,6 +373,20 @@ export class InstallationManager {
     } finally {
       if (s.heartbeat) clearInterval(s.heartbeat);
       delete s.heartbeat;
+    }
+    if (!(await this.yieldIfStop(instanceId, s))) return;
+
+    // Safety net: dependencies may also have been paused from the Downloads
+    // page. Re-check before FINALIZING so a paused file can never slip past
+    // into a READY instance (#UX-1).
+    const pausedAfterDeps = this.pausedPendingCount(s);
+    if (pausedAfterDeps > 0) {
+      this.setStage(
+        s,
+        `安装被暂停：${pausedAfterDeps} 个文件已在下载页面暂停。请先在下载页恢复这些文件，再点击「继续」完成安装。`,
+      );
+      this.setPhase(instanceId, s, instance.id, "PAUSED");
+      return;
     }
     if (!(await this.yieldIfStop(instanceId, s))) return;
 
@@ -466,6 +491,20 @@ export class InstallationManager {
       this.setStage(s, "已请求暂停，将在下载阶段生效…");
     }
     return true;
+  }
+
+  /**
+   * Number of this install's pending files the user paused from the Downloads
+   * page. A paused task is NOT terminal and NOT a failure — if any file waits
+   * for resume we must hold the install in PAUSED instead of marking it READY,
+   * otherwise the user sees "installed ✓" for an incomplete game (#UX-1).
+   */
+  private pausedPendingCount(s: Session): number {
+    let count = 0;
+    for (const t of this.downloadManager.list()) {
+      if (s.pending.has(t.dest) && t.status === "paused") count += 1;
+    }
+    return count;
   }
 
   /**

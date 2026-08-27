@@ -41,6 +41,8 @@ export interface InstanceDto {
   serverIp: string | null;
   tags: string[];
   favorite: boolean;
+  /** Launch account pinned to this instance; falls back to the global current account when null. */
+  preferredAccountId: string | null;
   gameDir: string;
   status: string;
   installedAt: string | null;
@@ -64,6 +66,7 @@ export interface InstanceCreateInput {
   serverIp?: string;
   tags?: string[];
   favorite?: boolean;
+  preferredAccountId?: string | null;
 }
 
 export type InstancePatchInput = Partial<InstanceCreateInput>;

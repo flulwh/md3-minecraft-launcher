@@ -25,6 +25,7 @@ export const instanceCreateSchema = z.object({
   serverIp: z.string().max(255).optional(),
   tags: z.array(z.string().min(1).max(32)).max(32).optional(),
   favorite: z.boolean().optional(),
+  preferredAccountId: z.string().max(64).nullable().optional(),
 });
 
 export const instancePatchSchema = instanceCreateSchema.partial();
@@ -49,6 +50,7 @@ export interface InstanceDto {
   serverIp: string | null;
   tags: string[];
   favorite: boolean;
+  preferredAccountId: string | null;
   gameDir: string;
   status: string;
   installedAt: string | null;
@@ -99,6 +101,7 @@ export class InstanceService {
         ...(input.serverIp !== undefined ? { serverIp: input.serverIp } : {}),
         ...(input.tags !== undefined ? { tags: JSON.stringify(input.tags) } : {}),
         ...(input.favorite !== undefined ? { favorite: input.favorite } : {}),
+        ...(input.preferredAccountId !== undefined ? { preferredAccountId: input.preferredAccountId } : {}),
       },
     });
     this.prepareDirectories(row.id);
@@ -135,6 +138,7 @@ export class InstanceService {
         ...(patch.serverIp !== undefined ? { serverIp: patch.serverIp } : {}),
         ...(patch.tags !== undefined ? { tags: JSON.stringify(patch.tags) } : {}),
         ...(patch.favorite !== undefined ? { favorite: patch.favorite } : {}),
+        ...(patch.preferredAccountId !== undefined ? { preferredAccountId: patch.preferredAccountId } : {}),
       },
     });
     this.bus.publish(Events.INSTANCE_UPDATED, { id, action: "updated" }, id);
@@ -222,6 +226,7 @@ export class InstanceService {
     serverIp: string | null;
     tags: string | null;
     favorite: boolean;
+    preferredAccountId: string | null;
     status: string;
     installedAt: Date | null;
     lastError: string | null;
@@ -244,6 +249,7 @@ export class InstanceService {
       serverIp: row.serverIp,
       tags: parseJsonArray(row.tags),
       favorite: row.favorite,
+      preferredAccountId: row.preferredAccountId,
       gameDir: this.gameDirectory(row.id),
       status: row.status,
       installedAt: row.installedAt ? row.installedAt.toISOString() : null,

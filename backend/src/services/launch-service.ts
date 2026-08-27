@@ -266,6 +266,17 @@ export class LaunchService {
 
     // ---- JVM args
     const extraJvmArgs = parseArray(instance.jvmArgs);
+    // Memory is configured through the dedicated memoryMaxMb/memoryMinMb fields
+    // (rendered into -Xmx/-Xms). A user-supplied -Xmx/-Xms/-Xss would silently
+    // override or duplicate them — the JVM takes the last occurrence, making the
+    // effective value unpredictable, so reject it instead (#5).
+    const MEMORY_JVM_RE = /^-X(?:mx|ms|ss)[0-9.]+[kmgt]?$/i;
+    const memoryConflict = extraJvmArgs.find((a) => MEMORY_JVM_RE.test(a));
+    if (memoryConflict) {
+      throw new LaunchError(
+        `JVM 参数「${memoryConflict}」与「最大内存」设置冲突：请在“最大内存”滑块中设置内存，不要在额外 JVM 参数中重复填写`,
+      );
+    }
     // User-supplied JVM args must pass the allow-list (no agent loading, no
     // classpath/JAR override). Trusted launcher args (e.g. memory, the
     // authlib-injector -javaagent) are appended after validation.
@@ -534,6 +545,7 @@ export class LaunchService {
       assetIndex: null,
       downloaded: 0,
       failed: 0,
+      paused: 0,
     };
   }
 

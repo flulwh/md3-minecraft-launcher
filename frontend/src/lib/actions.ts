@@ -21,11 +21,24 @@ function getDeps(): ActionDeps | null {
   return deps;
 }
 
-export function resolveAccount(): PublicAccount | null {
+/**
+ * Resolves the account that will be used to launch `instanceId`.
+ * Priority: the instance's pinned `preferredAccountId` → the global current
+ * account → the first online (yggdrasil) account → the first account.
+ */
+export function resolveAccount(instanceId?: string): PublicAccount | null {
   const d = getDeps();
   if (!d) return null;
   const accounts = d.qc.getQueryData<PublicAccount[]>(qk.accounts);
   if (!accounts || accounts.length === 0) return null;
+  if (instanceId) {
+    const instances = d.qc.getQueryData<{ id: string; preferredAccountId: string | null }[]>(qk.instances);
+    const pinned = instances?.find((i) => i.id === instanceId)?.preferredAccountId;
+    if (pinned) {
+      const pinnedAccount = accounts.find((a) => a.id === pinned);
+      if (pinnedAccount) return pinnedAccount;
+    }
+  }
   const preferred = uiStore.getState().currentAccountId;
   return (
     accounts.find((a) => a.id === preferred) ??
@@ -36,7 +49,7 @@ export function resolveAccount(): PublicAccount | null {
 }
 
 export async function startLaunch(instanceId: string): Promise<boolean> {
-  const account = resolveAccount();
+  const account = resolveAccount(instanceId);
   const d = getDeps();
   if (!account || !d) {
     toastStore.getState().push("请先添加一个账户再启动游戏", "warning");
@@ -78,12 +91,38 @@ export async function startLaunch(instanceId: string): Promise<boolean> {
   }
 }
 
-export async function stopSession(instanceId: string): Promise<void> {
+/** When a graceful stop was requested per instance (for the "停止中…" countdown). */
+const stopStartTimes = new Map<string, number>();
+
+export function stopSession(instanceId: string): Promise<void> {
   const s = launchStore.getState().get(instanceId);
-  if (!s.sessionId || !["running", "launching"].includes(s.phase)) return;
+  if (!s.sessionId || !["running", "launching"].includes(s.phase)) return Promise.resolve();
+  stopStartTimes.set(instanceId, Date.now());
   launchStore.getState().patch(instanceId, { phase: "stopping" });
+  return launchApi
+    .stop(s.sessionId)
+    .then(() => undefined)
+    .catch(() => {
+      stopStartTimes.delete(instanceId);
+      const cur = launchStore.getState().get(instanceId);
+      if (cur.phase === "stopping") launchStore.getState().patch(instanceId, { phase: "running" });
+    });
+}
+
+/** Milliseconds elapsed since the user requested a graceful stop (0 if none). */
+export function stopElapsedMs(instanceId: string): number {
+  const t = stopStartTimes.get(instanceId);
+  return t === undefined ? 0 : Date.now() - t;
+}
+
+/** Force-terminates the process immediately instead of waiting for graceful exit. */
+export async function forceStopSession(instanceId: string): Promise<void> {
+  const s = launchStore.getState().get(instanceId);
+  if (!s.sessionId) return;
+  stopStartTimes.delete(instanceId);
   try {
-    await launchApi.stop(s.sessionId);
+    await launchApi.kill(s.sessionId);
+    launchStore.getState().patch(instanceId, { phase: "stopping" });
   } catch {
     const cur = launchStore.getState().get(instanceId);
     if (cur.phase === "stopping") launchStore.getState().patch(instanceId, { phase: "running" });
@@ -91,7 +130,7 @@ export async function stopSession(instanceId: string): Promise<void> {
 }
 
 export async function previewLaunch(instanceId: string): Promise<void> {
-  const account = resolveAccount();
+  const account = resolveAccount(instanceId);
   if (!account) {
     toastStore.getState().push("请先添加一个账户", "warning");
     getDeps()?.navigate("/accounts");

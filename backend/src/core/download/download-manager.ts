@@ -25,6 +25,8 @@ export interface BatchResult {
   completed: number;
   failed: number;
   cancelled: number;
+  /** Tasks the user paused (awaiting resume) — not terminal, not a failure. */
+  paused: number;
   failures: Array<{ dest: string; error: string }>;
 }
 
@@ -338,14 +340,17 @@ export class DownloadManager {
 
 export function summarize(promises: Promise<TaskOutcome>[]): Promise<BatchResult> {
   return Promise.all(promises).then((results) => {
-    const batch: BatchResult = { completed: 0, failed: 0, cancelled: 0, failures: [] };
+    const batch: BatchResult = { completed: 0, failed: 0, cancelled: 0, paused: 0, failures: [] };
     for (const r of results) {
       if (r.status === "completed") batch.completed += 1;
       else if (r.status === "failed") {
         batch.failed += 1;
         batch.failures.push({ dest: r.snapshot.dest, error: r.snapshot.error ?? "unknown" });
       } else if (r.status === "paused") {
-        batch.cancelled += 1; // treat pause as non-terminal "not completed"
+        // Pause is NOT a terminal state: the task is suspended awaiting resume.
+        // Count it separately so callers can hold an install instead of treating
+        // the batch as silently cancelled. (#UX-1)
+        batch.paused += 1;
       } else batch.cancelled += 1;
     }
     return batch;

@@ -24,6 +24,7 @@ import { LoaderChip } from "../design-system/LoaderChip";
 import { StateView } from "../design-system/StateView";
 import { LogViewer } from "../components/LogViewer";
 import { LaunchButton } from "../components/LaunchButton";
+import { AccountChip } from "../components/AccountChip";
 import { ContentListPanel } from "../components/ContentListPanel";
 import { InstallProgressPanel } from "../components/InstallProgressPanel";
 import { BackupPanel } from "../components/BackupPanel";
@@ -129,6 +130,7 @@ export function InstanceDetailPage() {
             <Box sx={{ display: "flex", alignItems: "center", gap: 1, mt: 1, flexWrap: "wrap" }}>
               <Chip size="small" label={`Minecraft ${inst.minecraftVersion}`} variant="outlined" />
               <LoaderChip loader={inst.loader} version={inst.loaderVersion} />
+              <AccountChip instanceId={inst.id} />
               <Chip size="small" variant="outlined" label={`${fmtBytes(inst.memoryMaxMb * 1024 * 1024)} 内存`} />
               {runningLike && (
                 <Chip size="small" color="success" label={phase === "running" ? "运行中" : "准备中"} />

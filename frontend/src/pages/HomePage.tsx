@@ -10,20 +10,19 @@ import { useNavigate } from "react-router-dom";
 import { AppIcon } from "../design-system/AppIcon";
 import { LoaderChip } from "../design-system/LoaderChip";
 import { SectionHeader } from "./HomeSections";
-import { useAccounts, useHistorySessions, useInstances } from "../hooks/queries";
-import { resolveAccount } from "../lib/actions";
+import { useHistorySessions, useInstances } from "../hooks/queries";
 import { fmtBytes, fmtRelative, fmtSpeed } from "../lib/format";
 import { launchStore } from "../stores/launchStore";
 import { downloadStore } from "../stores/downloadStore";
 import { CreateInstanceDialog } from "../components/CreateInstanceDialog";
 import { LaunchButton } from "../components/LaunchButton";
+import { AccountChip } from "../components/AccountChip";
 import { useState } from "react";
 
 export function HomePage() {
   const navigate = useNavigate();
   const instances = useInstances();
   const history = useHistorySessions(50);
-  const accounts = useAccounts();
   const [createOpen, setCreateOpen] = useState(false);
 
   const lastPlayedByInstance = useMemo(() => {
@@ -37,14 +36,15 @@ export function HomePage() {
   const currentInstance = useMemo(() => {
     const list = instances.data ?? [];
     if (list.length === 0) return null;
+    // Priority: running > last played > first created (UX #7). The previous
+    // branch had dead code (`|| last` was always truthy), so a running
+    // instance was never surfaced when a last-played instance existed.
+    const running = list.find((i) =>
+      ["running", "launching", "preparing", "downloading"].includes(launchStore.getState().get(i.id).phase),
+    );
+    if (running) return running;
     const lastId = [...lastPlayedByInstance.keys()][0];
     const last = list.find((i) => i.id === lastId);
-    if (last && !launchStore.getState().get(last.id).sessionId) {
-      const anyRunning = list.find((i) => launchStore.getState().get(i.id).sessionId);
-      if (!anyRunning || last) return last;
-    }
-    const running = list.find((i) => ["running", "launching", "preparing", "downloading"].includes(launchStore.getState().get(i.id).phase));
-    if (running) return running;
     return last ?? list[0] ?? null;
   }, [instances.data, lastPlayedByInstance]);
 
@@ -62,8 +62,6 @@ export function HomePage() {
   const activeTasks = Object.values(overrides);
   const topTask = activeTasks.sort((a, b) => b.progressPct - a.progressPct)[0];
   const totalSpeed = activeTasks.reduce((s, t) => s + t.speedBps, 0);
-
-  const account = accounts.data ? resolveAccount() : null;
 
   if (instances.isLoading) {
     return (
@@ -94,7 +92,6 @@ export function HomePage() {
           loaderVersion={currentInstance.loaderVersion}
           memoryMb={currentInstance.memoryMaxMb}
           lastPlayed={lastPlayedByInstance.get(currentInstance.id) ?? null}
-          accountName={account?.username ?? null}
           onOpenDetail={() => navigate(`/instances/${currentInstance.id}`)}
         />
       ) : null}
@@ -174,7 +171,6 @@ function HeroCard(props: {
   loaderVersion: string | null;
   memoryMb: number;
   lastPlayed: string | null;
-  accountName: string | null;
   onOpenDetail: () => void;
 }) {
   return (
@@ -203,11 +199,11 @@ function HeroCard(props: {
           <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap", mt: 1 }}>
             <Chip size="small" label={`Minecraft ${props.mcVersion}`} sx={{ bgcolor: "rgba(255,255,255,0.35)" }} />
             <LoaderChip loader={props.loader} version={props.loaderVersion} />
+            <AccountChip instanceId={props.instanceId} />
             <Chip size="small" label={`${fmtBytes(props.memoryMb * 1024 * 1024)} 内存`} sx={{ bgcolor: "rgba(255,255,255,0.35)" }} />
           </Box>
           <Typography variant="body2" sx={{ mt: 1.5, opacity: 0.85 }}>
             上次游玩：{fmtRelative(props.lastPlayed)}
-            {props.accountName ? ` · 账户 ${props.accountName}` : ""}
           </Typography>
         </Box>
 

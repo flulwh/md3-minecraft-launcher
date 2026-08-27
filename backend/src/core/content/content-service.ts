@@ -231,6 +231,13 @@ export class ContentManager {
     const version = versions.find((v) => v.id === versionId);
     if (!version) return this.skeleton(instanceId, provider, projectId, versionId);
 
+    // Replace semantics (UX #2): installing a different version of a project that
+    // is already installed must remove the old jar instead of stacking it. Most
+    // mod loaders crash on two jars with the same mod id, and users expect
+    // "install another version" to mean "update". Removing first also frees the
+    // destination filename in case the old version shares it with the new one.
+    await this.removeOtherVersions(instanceId, provider, projectId, versionId);
+
     const fileName = await this.downloadMarketFile(instanceId, kind, version);
     const versionRow = await this.upsertMarketRecords(provider, project, version, fileName);
 
@@ -319,6 +326,50 @@ export class ContentManager {
     }
     if (removed.length > 0) this.publishChanged(instanceId, (MARKET_TYPE_TO_KIND[rows[0]!.type as MarketContentType] ?? "mod"));
     return removed;
+  }
+
+  /**
+   * Removes installed versions of a project other than `keepVersionId` (file +
+   * DB row). Used to implement replace-on-reinstall semantics so switching a
+   * mod to another version doesn't leave a duplicate jar behind (UX #2).
+   */
+  private async removeOtherVersions(
+    instanceId: string,
+    provider: MarketProviderId,
+    projectId: string,
+    keepVersionId: string,
+  ): Promise<void> {
+    const item = await this.db.client.marketItem.findUnique({
+      where: { provider_externalId: { provider, externalId: projectId } },
+    });
+    if (!item) return;
+    const rows = await this.db.client.installedContent.findMany({
+      where: { instanceId, marketItemId: item.id, versionId: { not: keepVersionId } },
+    });
+    if (rows.length === 0) return;
+
+    for (const row of rows) {
+      const kind = MARKET_TYPE_TO_KIND[row.type as MarketContentType];
+      if (kind) {
+        const dir = this.contentDir(instanceId, kind);
+        const ext = MARKET_KIND_EXTENSIONS[kind];
+        const variants = ext
+          ? [row.fileName, row.fileName.endsWith(`.${ext}`) ? `${row.fileName}${MOD_DISABLED_SUFFIX}` : row.fileName]
+          : [row.fileName];
+        for (const v of variants) {
+          try {
+            await fs.promises.rm(path.join(dir, v), { force: true });
+          } catch {
+            /* best effort */
+          }
+        }
+      }
+      await this.db.client.installedContent.delete({ where: { id: row.id } });
+    }
+    this.logger.info(
+      { instanceId, provider, projectId, replaced: rows.length },
+      "removed older installed versions before replacing",
+    );
   }
 
   /** Lists marketplace-sourced content installed in an instance. */
