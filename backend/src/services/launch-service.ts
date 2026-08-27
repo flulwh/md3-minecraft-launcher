@@ -237,10 +237,12 @@ export class LaunchService {
     if (instance.serverIp && instance.serverIp.length > 0) {
       gameArgsList.push("--server", instance.serverIp);
     }
+    // Window size is injected by the legacyMinecraftArguments template as
+    // `--width ${resolution_width} --height ${resolution_height}` (rendered from
+    // buildVariables with a 854x480 default), so do NOT push it manually here —
+    // duplicating it makes Forge's early-display fail to parse width as a single value.
     if (instance.fullscreen) {
       gameArgsList.push("--fullscreen");
-    } else if (instance.width !== null && instance.height !== null) {
-      gameArgsList.push("--width", String(instance.width), "--height", String(instance.height));
     }
 
     // ---- Command
