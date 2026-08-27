@@ -12,6 +12,8 @@ interface LogStore {
   lines: Record<string, LogLine[]>;
   append: (instanceId: string, data: MinecraftLogData) => void;
   clear: (instanceId: string) => void;
+  /** Remove the instance's key entirely (e.g. after the instance is deleted). */
+  remove: (instanceId: string) => void;
 }
 
 const trim = (arr: LogLine[]): LogLine[] =>
@@ -31,4 +33,10 @@ export const logStore = create<LogStore>((set) => ({
     })),
   clear: (instanceId) =>
     set((state) => ({ lines: { ...state.lines, [instanceId]: [] } })),
+  remove: (instanceId) =>
+    set((state) => {
+      if (!(instanceId in state.lines)) return state;
+      const { [instanceId]: _removed, ...rest } = state.lines;
+      return { lines: rest };
+    }),
 }));

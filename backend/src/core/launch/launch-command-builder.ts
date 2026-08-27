@@ -37,6 +37,17 @@ const ENV_HIJACK_KEYS = new Set([
 ]);
 
 /**
+ * Minimal environment the launched JVM receives. An explicit whitelist instead
+ * of inheriting the backend's whole process.env: any Java mod can read env vars
+ * via System.getenv(), so backend credentials (LAUNCHER_SECRET, DATABASE_URL,
+ * ...) must never be reachable from the game process.
+ */
+const MINIMAL_ENV_ALLOWLIST = [
+  "PATH", "SystemRoot", "HOME", "USERPROFILE", "TEMP", "TMP", "LANG",
+  "DISPLAY", "XAUTHORITY", "WAYLAND_DISPLAY",
+];
+
+/**
  * Rise-level check: a user-injected JVM arg must be a well-formed runtime flag
  * and may not load native/Java agents or override the launch classpath.
  */
@@ -56,7 +67,9 @@ export function assertSafeGameArg(arg: string): void {
   if (CONTROL_CHARS_RE.test(arg)) {
     throw new LaunchSecurityError("Game argument contains control characters");
   }
-  if (/^-(?:javaagent|agentlib|agentpath|X|D)/iu.test(arg)) {
+  // JVM flags are case-sensitive (-D / -X / -javaagent), so the match is too:
+  // a case-insensitive test would also reject innocent game args like "-d" / "-x".
+  if (/^-(?:javaagent|agentlib|agentpath|X|D)/u.test(arg)) {
     throw new LaunchSecurityError(`Disallowed game argument: ${arg}`);
   }
 }
@@ -108,8 +121,13 @@ export class LaunchCommandBuilder {
 
     const args = [...input.jvmArgs, input.mainClass, ...input.gameArgs];
 
-    const env: Record<string, string> = { ...process.env as Record<string, string> };
-    delete env["NODE_OPTIONS"];
+    // Whitelist-only environment (never inherit process.env wholesale): mods
+    // run inside the JVM can read every leaked variable via System.getenv().
+    const env: Record<string, string> = {};
+    for (const k of MINIMAL_ENV_ALLOWLIST) {
+      const v = process.env[k];
+      if (v !== undefined) env[k] = v;
+    }
     if (process.platform === "win32") {
       env["OS"] = "Windows_NT";
     } else if (process.platform === "darwin") {

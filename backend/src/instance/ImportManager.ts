@@ -184,9 +184,10 @@ export class ImportManager {
   }
 
   private instanceRoot(instanceId: string): string {
-    const dir = path.join(this.config.instancesDir, instanceId);
-    resolveInside(this.config.instancesDir, dir);
-    return dir;
+    // Pass the raw segment to resolveInside (it joins + validates in one step).
+    // Pre-joining an absolute path would make path.resolve() bypass `base`,
+    // silently weakening the sandbox check if the call site ever changes.
+    return resolveInside(this.config.instancesDir, instanceId);
   }
 
   private publish(instanceId: string): void {

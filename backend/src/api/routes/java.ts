@@ -26,7 +26,15 @@ export async function javaRoutes(app: FastifyInstance, c: AppContainer): Promise
     return ok(reply, await c.java.scan());
   });
 
-  /** POST /api/v1/java/validate — probe a path with `java -version` and return info */
+  /**
+   * POST /api/v1/java/validate — probe a path with `java -version` and return info.
+   *
+   * Design tradeoff: this endpoint (and /add below) runs a user-supplied local
+   * executable via execFile with fixed args and no shell — no injection risk,
+   * but it IS an "execute any local binary the user names" surface. It is kept
+   * local-only (bound to 127.0.0.1) and behind the CORS allow-list; do not
+   * expose it to a remote/unauth'd network without re-reviewing this tradeoff.
+   */
   app.post("/api/v1/java/validate", async (req, reply) => {
     const body = parseBody(javaPathSchema, req.body);
     const rt = await c.java.validatePath(body.path);

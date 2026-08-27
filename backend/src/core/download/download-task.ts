@@ -17,6 +17,8 @@ import {
 const PROGRESS_EMIT_INTERVAL_MS = 250;
 const SPEED_WINDOW_MS = 5000;
 const MAX_ATTEMPTS_PER_URL = 3;
+/** Abort a download that stops receiving bytes (server keeps socket open). */
+const STALL_TIMEOUT_MS = 30_000;
 
 export class DownloadInterruptedError extends Error {
   constructor(public readonly reason: "paused" | "cancelled") {
@@ -306,15 +308,32 @@ export class DownloadTask {
 
       await new Promise<void>((resolve, reject) => {
         let settled = false;
+        let stallTimer: NodeJS.Timeout | null = null;
         const failOnce = (err: unknown): void => {
           if (settled) return;
           settled = true;
+          if (stallTimer) {
+            clearTimeout(stallTimer);
+            stallTimer = null;
+          }
           res.stream.destroy();
           writeStream.destroy();
           reject(err instanceof Error ? err : new Error(String(err)));
         };
+        // A server that stops sending bytes but keeps the socket open would
+        // otherwise hang this download forever; abort and let the retry /
+        // mirror-fallback logic take over.
+        const armStall = (): void => {
+          if (stallTimer) clearTimeout(stallTimer);
+          stallTimer = setTimeout(() => {
+            failOnce(new Error(`Download stalled: no data for ${STALL_TIMEOUT_MS / 1000}s`));
+          }, STALL_TIMEOUT_MS);
+          stallTimer.unref?.();
+        };
+        armStall();
 
         res.stream.on("data", (chunk: Buffer) => {
+          armStall();
           this.receivedValue += chunk.length;
           hash?.update(chunk);
           this.samples.push({ t: Date.now(), bytes: this.receivedValue });
@@ -339,6 +358,10 @@ export class DownloadTask {
               `Size mismatch for ${path.basename(this.request.dest)}: expected ${this.request.size}, got ${this.receivedValue}`,
             ));
             return;
+          }
+          if (stallTimer) {
+            clearTimeout(stallTimer);
+            stallTimer = null;
           }
           settled = true;
           resolve();

@@ -25,6 +25,8 @@ export interface ManagedProcess {
   endedAtMs: number | null;
   exitCode: number | null;
   crashReason: string | null;
+  /** True for dedicated-server launches (console `stop` command applies). */
+  isServer: boolean;
   /** Structured Process-Supervisor diagnosis, set when the process crashes. */
   diagnosis?: CrashDiagnosis;
   /** Absolute path of the auto-generated crash report (if any). */
@@ -36,7 +38,7 @@ interface StartOptions {
   instanceId: string;
   command: LaunchCommand;
   /** Launch context the Process Supervisor uses to explain a crash. */
-  meta?: { loader: string; minecraftVersion: string; javaMajor: number };
+  meta?: { loader: string; minecraftVersion: string; javaMajor: number; isServer?: boolean };
 }
 
 /** How many recent log lines are kept per session for crash analysis. */
@@ -69,6 +71,11 @@ export class MinecraftProcessManager {
 
     const logFile = path.join(opts.command.cwd, "launcher-output.log");
     const outStream = fs.createWriteStream(logFile, { flags: "a" });
+    // A failed log write (disk full, permissions) must never crash the whole
+    // backend: an unhandled "error" event on a stream throws process-wide.
+    outStream.on("error", (err) => {
+      this.logger.warn({ err, sessionId: opts.sessionId }, "minecraft log file write failed");
+    });
     this.tails.set(opts.sessionId, []);
 
     this.logger.info(
@@ -95,6 +102,7 @@ export class MinecraftProcessManager {
       endedAtMs: null,
       exitCode: null,
       crashReason: null,
+      isServer: opts.meta?.isServer ?? false,
     };
     this.sessions.set(opts.sessionId, proc);
 
@@ -104,7 +112,11 @@ export class MinecraftProcessManager {
       opts.instanceId,
     );
 
+    // stdout and stderr share one append stream; only end() it once BOTH pipes
+    // have closed, otherwise the second .end() throws ERR_STREAM_WRITE_AFTER_END.
+    let openPipes = 0;
     const attachLog = (stream: NodeJS.ReadableStream, fallbackLevel: string): void => {
+      openPipes += 1;
       const rl = readline.createInterface({ input: stream });
       rl.on("line", (line) => {
         const parsed = classifyLine(line, fallbackLevel);
@@ -121,11 +133,15 @@ export class MinecraftProcessManager {
         outStream.write(`${line}\n`);
         void parsed;
       });
-      rl.on("close", () => outStream.end());
+      rl.on("close", () => {
+        openPipes -= 1;
+        if (openPipes === 0) outStream.end();
+      });
     };
 
     if (child.stdout) attachLog(child.stdout, "INFO");
     if (child.stderr) attachLog(child.stderr, "ERROR");
+    if (openPipes === 0) outStream.end();
 
     child.on("error", (err) => {
       this.logger.error({ err, sessionId: opts.sessionId }, "minecraft spawn error");
@@ -261,16 +277,49 @@ export class MinecraftProcessManager {
     return { diagnosis, reportPath };
   }
 
-  /** Graceful stop: pipe `stop` to the server console, fall back to SIGTERM. */
+  /**
+   * Graceful stop: dedicated servers receive the console `stop` command (clean
+   * world save); clients — which never read stdin — get a graceful OS-level
+   * terminate (WM_CLOSE on Windows via taskkill, SIGTERM elsewhere) so config /
+   * world data can flush. Falls back to killTree once `timeoutMs` elapses.
+   */
   stop(sessionId: string, timeoutMs = 30_000): boolean {
     const proc = this.sessions.get(sessionId);
     if (!proc || !["starting", "running"].includes(proc.status)) return false;
     proc.status = "stopping";
 
     try {
-      proc.child.stdin?.write("stop\n");
+      if (proc.isServer) {
+        // Dedicated server console command; triggers a clean world save.
+        try {
+          proc.child.stdin?.write("stop\n");
+        } catch {
+          /* console closed already; fall through to the timeout force-kill */
+        }
+      } else if (process.platform === "win32") {
+        // Client on Windows: taskkill WITHOUT /F sends WM_CLOSE so the game
+        // window can shut down gracefully instead of being force-terminated.
+        const pid = proc.child.pid;
+        if (pid === null || pid === undefined) {
+          this.kill(sessionId);
+        } else {
+          const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
+          const res = spawnSync("taskkill", ["/pid", String(pid), "/T"], {
+            windowsHide: true,
+            stdio: "ignore",
+          });
+          if (res.status !== 0) this.kill(sessionId);
+        }
+      } else {
+        // POSIX client: SIGTERM lets the JVM run its shutdown hooks.
+        try {
+          proc.child.kill("SIGTERM");
+        } catch {
+          this.kill(sessionId);
+        }
+      }
     } catch {
-      /* console closed already */
+      this.kill(sessionId);
     }
 
     const forceTimer = setTimeout(() => {

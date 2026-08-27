@@ -16,6 +16,7 @@ import { useDeleteInstance, useDeleteSummary, useDuplicateInstance, useExportIns
 import { previewLaunch, startLaunch, stopSession } from "../lib/actions";
 import { fmtBytes, fmtRelative, loaderLabel } from "../lib/format";
 import { launchStore } from "../stores/launchStore";
+import { logStore } from "../stores/logStore";
 import { toast } from "../stores/toastStore";
 
 export interface InstanceCardProps {
@@ -297,7 +298,10 @@ export function InstanceCard({ instance, lastPlayedAt, onEdit }: InstanceCardPro
         }
         onConfirm={() =>
           deleteInstance.mutate(instance.id, {
-            onSuccess: () => setConfirmDelete(false),
+            onSuccess: () => {
+              logStore.getState().remove(instance.id);
+              setConfirmDelete(false);
+            },
           })
         }
       />

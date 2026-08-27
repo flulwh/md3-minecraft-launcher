@@ -2,7 +2,7 @@ import { Account } from "@prisma/client";
 import { AppConfig } from "../../config/env.js";
 import { Logger } from "../../config/logger.js";
 import { Database } from "../../infrastructure/database/database.js";
-import { AuthError, AccountNotFoundError } from "../../errors/index.js";
+import { AuthError, AuthNetworkError, AccountNotFoundError } from "../../errors/index.js";
 import { TokenCipher } from "./token-cipher.js";
 import { YggdrasilAuthService, YggdrasilProfile } from "./yggdrasil-auth-service.js";
 import { MinecraftProfileInfo, offlineUuidFor, normalizeUuid } from "./auth-types.js";
@@ -171,7 +171,25 @@ export class AuthenticationService {
     const accessToken = this.decryptToken(row.accessToken);
     const clientToken = this.decryptToken(row.clientToken);
 
-    if (!(await this.yggdrasil.validate(accessToken, clientToken))) {
+    let valid: boolean;
+    try {
+      valid = await this.yggdrasil.validate(accessToken, clientToken);
+    } catch (err) {
+      if (err instanceof AuthNetworkError) {
+        // Transient network failure, not an invalid credential: keep using the
+        // stored token (best effort) instead of forcing a re-login.
+        this.logger.warn(
+          { account: row.id, err },
+          "token validation skipped (auth server unreachable); using stored token",
+        );
+        const token = { token: accessToken, name: profile.name, uuid: profile.id };
+        this.tokenCache.set(accountId, token);
+        return token;
+      }
+      throw err;
+    }
+
+    if (!valid) {
       const refreshed = await this.refreshAndPersist(row, accessToken, clientToken, profile);
       const token = { token: refreshed.token, name: profile.name, uuid: profile.id };
       this.tokenCache.set(accountId, token);

@@ -36,6 +36,13 @@ export class MarketService {
     return p;
   }
 
+  /** Only providers whose backend is actually implemented / configured. */
+  availableProviders(): MarketProviderId[] {
+    return [...this.providers.entries()]
+      .filter(([, p]) => p.available)
+      .map(([id]) => id);
+  }
+
   async search(
     id: MarketProviderId,
     params: MarketSearchParams,

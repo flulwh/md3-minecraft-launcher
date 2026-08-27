@@ -99,7 +99,9 @@ export async function marketRoutes(app: FastifyInstance, c: AppContainer): Promi
   });
 
   app.get("/api/v2/market/providers", async (_req, reply) => {
-    return ok(reply, ["modrinth", "curseforge"]);
+    // Capability probe: only list providers that are actually implemented, so
+    // UIs never offer a "CurseForge" option that would 501 on every request.
+    return ok(reply, c.market.availableProviders());
   });
 
   /** POST /api/v2/market/install — download a release into an instance & track it */

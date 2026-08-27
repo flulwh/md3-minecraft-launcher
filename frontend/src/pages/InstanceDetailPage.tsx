@@ -40,6 +40,7 @@ import {
 import { previewLaunch, stopSession } from "../lib/actions";
 import { fmtBytes, fmtDateTime, loaderLabel } from "../lib/format";
 import { launchStore } from "../stores/launchStore";
+import { logStore } from "../stores/logStore";
 import { repairStore } from "../stores/repairStore";
 import { toast } from "../stores/toastStore";
 
@@ -221,7 +222,14 @@ export function InstanceDetailPage() {
         confirmText="删除"
         loading={deleteInstance.isPending}
         message="将同时删除该实例的本地游戏文件（含存档与配置），此操作不可恢复。"
-        onConfirm={() => deleteInstance.mutate(inst.id, { onSuccess: () => navigate("/instances") })}
+        onConfirm={() =>
+          deleteInstance.mutate(inst.id, {
+            onSuccess: () => {
+              logStore.getState().remove(inst.id);
+              navigate("/instances");
+            },
+          })
+        }
       />
     </Box>
   );
@@ -822,7 +830,14 @@ function SettingsForm({ inst, onDeleted }: SettingsFormProps) {
         confirmText="删除"
         loading={deleteInstance.isPending}
         message="将同时删除该实例的本地游戏文件（含存档与配置），此操作不可恢复。"
-        onConfirm={() => deleteInstance.mutate(inst.id, { onSuccess: onDeleted })}
+        onConfirm={() =>
+          deleteInstance.mutate(inst.id, {
+            onSuccess: () => {
+              logStore.getState().remove(inst.id);
+              onDeleted();
+            },
+          })
+        }
       />
     </Card>
   );

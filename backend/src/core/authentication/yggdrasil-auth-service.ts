@@ -1,5 +1,5 @@
 import { HttpClient, HttpResult } from "../../infrastructure/http/http-client.js";
-import { AuthError } from "../../errors/index.js";
+import { AuthError, AuthNetworkError } from "../../errors/index.js";
 import { Logger } from "../../config/logger.js";
 
 /** A character/profile belonging to a Yggdrasil account. */
@@ -109,15 +109,19 @@ export class YggdrasilAuthService {
 
   /** true when the accessToken/clientToken pair is still accepted by the server. */
   async validate(accessToken: string, clientToken: string): Promise<boolean> {
+    let res: HttpResult<unknown>;
     try {
-      const res = await this.http.postJson<unknown>(this.baseUrl + ENDPOINTS.validate, {
+      res = await this.http.postJson<unknown>(this.baseUrl + ENDPOINTS.validate, {
         accessToken,
         clientToken,
       });
-      return res.status === 204 || res.status === 200;
-    } catch {
-      return false;
+    } catch (err) {
+      // Network-level failure (timeout / DNS / reset): the credential was NOT
+      // rejected — rethrow so callers can tell a transient outage apart from an
+      // actually-invalid token instead of forcing a spurious re-login.
+      throw new AuthNetworkError(err);
     }
+    return res.status === 204 || res.status === 200;
   }
 
   // ---------------------------------------------------------------- helpers

@@ -139,7 +139,17 @@ export class DownloadManager {
 
   /** Dynamically update the max concurrent downloads. Triggers scheduling. */
   setConcurrency(n: number): void {
-    this.config.env.DOWNLOAD_CONCURRENCY = n;
+    // Mirror the startup EnvSchema bound (min 1 / max 64): 0 would deadlock the
+    // scheduler (active.size < 0 is never true) and huge values could saturate
+    // bandwidth / file handles.
+    const clamped = Math.min(64, Math.max(1, Math.floor(n)));
+    if (clamped !== n) {
+      this.logger.warn(
+        { requested: n, clamped },
+        "download concurrency clamped to allowed range [1, 64]",
+      );
+    }
+    this.config.env.DOWNLOAD_CONCURRENCY = clamped;
     this.schedule();
   }
 
@@ -228,7 +238,7 @@ export class DownloadManager {
         if (err.reason === "paused") {
           this.logger.debug({ taskId: task.id }, "download paused");
           this.events.emit("task-paused", task.snapshot());
-          this.resolveDeferred(task, { status: "cancelled", snapshot: task.snapshot() });
+          this.resolveDeferred(task, { status: "paused", snapshot: task.snapshot() });
         } else {
           this.events.emit("task-cancelled", task.snapshot());
           this.resolveDeferred(task, { status: "cancelled", snapshot: task.snapshot() });
@@ -257,11 +267,34 @@ export class DownloadManager {
     if (entry) entry.d.resolve(outcome);
   }
 
+  /**
+   * Cleans up scheduler bookkeeping once a task reaches a terminal state.
+   *
+   * Completed tasks keep their destination → task mapping (and resolved
+   * deferred) for a short retention window so `enqueue()` can deduplicate
+   * against the same destination, then the whole record is pruned.
+   *
+   * Failed / cancelled tasks drop their dedup mapping immediately and are
+   * pruned from the task map after the same retention window (list()/get() stay
+   * useful briefly). Paused tasks remain in the task map until resumed or
+   * cancelled so `resume()` keeps working.
+   */
   private settleCleanup(task: DownloadTask): void {
+    if (task.status === "completed") {
+      const prune = (): void => {
+        this.tasks.delete(task.id);
+        const destKey = [...this.byDest.entries()].find(([, id]) => id === task.id)?.[0];
+        if (destKey) this.byDest.delete(destKey);
+        this.deferreds.delete(task.id);
+      };
+      setTimeout(prune, 60_000).unref?.();
+      return;
+    }
+
     const destKey = [...this.byDest.entries()].find(([, id]) => id === task.id)?.[0];
     if (destKey) this.byDest.delete(destKey);
     this.deferreds.delete(task.id);
-    // Completed task snapshots remain queryable via list()/get().
+
     if (["failed", "cancelled"].includes(task.status)) {
       // keep record briefly for API visibility; prune on next GC cycle
       setTimeout(() => {

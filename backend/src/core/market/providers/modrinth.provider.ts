@@ -61,6 +61,7 @@ interface ModrinthVersion {
 
 export class ModrinthProvider implements MarketProvider {
   readonly id = "modrinth" as MarketProviderId;
+  readonly available = true;
 
   constructor(
     private readonly http: HttpClient,

@@ -16,6 +16,7 @@ export type ErrorCode =
   | "LAUNCH_FAILED"
   | "PREFLIGHT_FAILED"
   | "AUTH_FAILED"
+  | "AUTH_NETWORK"
   | "AUTH_PENDING"
   | "LOADER_INSTALL_FAILED"
   | "LOADER_NOT_INSTALLED"
@@ -86,6 +87,24 @@ export class ValidationError extends AppError {
 export class AuthError extends AppError {
   constructor(message: string, code: ErrorCode = "AUTH_FAILED") {
     super(code, message, 401);
+  }
+}
+
+/**
+ * Raised when a network-level failure (timeout / DNS / connection reset) stops
+ * us from contacting the auth server — distinct from the server explicitly
+ * rejecting a credential, so callers don't mistake a transient outage for an
+ * invalid token and force a re-login.
+ */
+export class AuthNetworkError extends AppError {
+  constructor(cause?: unknown) {
+    super(
+      "AUTH_NETWORK",
+      cause instanceof Error && cause.message
+        ? `无法连接认证服务器：${cause.message}`
+        : "无法连接认证服务器",
+      502,
+    );
   }
 }
 

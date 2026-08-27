@@ -10,6 +10,8 @@ import type { MarketHomeOptions, MarketProvider, MarketSearchParams, MarketHome 
  */
 export class CurseForgeProvider implements MarketProvider {
   readonly id = "curseforge";
+  /** Registered as a stub so a flag can flip it on; not usable yet. */
+  readonly available = false;
 
   constructor(private readonly logger: Logger) {}
 

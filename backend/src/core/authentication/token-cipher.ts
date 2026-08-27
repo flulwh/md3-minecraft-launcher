@@ -15,7 +15,28 @@ export class TokenCipher {
 
   static create(secretEnv: string | undefined, dataDir: string): TokenCipher {
     if (secretEnv && secretEnv.length >= 16) {
-      const key = crypto.scryptSync(secretEnv, "node-launcher-token-cipher", KEY_LENGTH);
+      // Use a per-device random salt (persisted like the .secret keyfile) rather
+      // than a hard-coded constant: a fixed salt would make every deployment
+      // sharing the same LAUNCHER_SECRET derive an identical key.
+      const saltFile = path.join(dataDir, ".secret-salt");
+      let salt: Buffer | null = null;
+      try {
+        const existing = fs.readFileSync(saltFile);
+        if (existing.length >= 16) salt = existing;
+      } catch {
+        /* generate below */
+      }
+      if (!salt) {
+        salt = crypto.randomBytes(16);
+        fs.mkdirSync(dataDir, { recursive: true });
+        fs.writeFileSync(saltFile, salt, { mode: 0o600 });
+        try {
+          fs.chmodSync(saltFile, 0o600);
+        } catch {
+          /* windows: best effort */
+        }
+      }
+      const key = crypto.scryptSync(secretEnv, salt, KEY_LENGTH);
       return new TokenCipher(key);
     }
     const keyFile = path.join(dataDir, ".secret");

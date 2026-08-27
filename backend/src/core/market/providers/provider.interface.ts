@@ -37,6 +37,8 @@ export interface MarketHome {
  */
 export interface MarketProvider {
   readonly id: MarketProviderId;
+  /** False when the provider is registered but not implemented/configured. */
+  readonly available: boolean;
   search(params: MarketSearchParams): Promise<MarketItemSummary[]>;
   getProject(id: string, type?: MarketContentType): Promise<MarketItemSummary>;
   getVersions(id: string): Promise<MarketVersion[]>;
