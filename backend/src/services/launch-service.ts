@@ -11,7 +11,7 @@ import { JavaService } from "./java-service.js";
 import { InstanceService } from "./instance-service.js";
 import { AuthenticationService } from "../core/authentication/authentication-service.js";
 import { MinecraftProcessManager } from "../core/process/process-manager.js";
-import { LaunchCommandBuilder, LaunchCommand } from "../core/launch/launch-command-builder.js";
+import { LaunchCommandBuilder, LaunchCommand, assertSafeLaunchJvmArg } from "../core/launch/launch-command-builder.js";
 import { ClasspathBuilder } from "../core/classpath/classpath-builder.js";
 import { GameArgumentResolver } from "../core/arguments/game-argument-resolver.js";
 import { JvmArgumentResolver } from "../core/arguments/jvm-argument-resolver.js";
@@ -190,6 +190,16 @@ export class LaunchService {
 
     // ---- JVM args
     const extraJvmArgs = parseArray(instance.jvmArgs);
+    // User-supplied JVM args must pass the allow-list (no agent loading, no
+    // classpath/JAR override). Trusted launcher args (e.g. memory, the
+    // authlib-injector -javaagent) are appended after validation.
+    for (const userArg of extraJvmArgs) {
+      try {
+        assertSafeLaunchJvmArg(userArg);
+      } catch (err) {
+        throw new LaunchError(err instanceof Error ? err.message : "disallowed JVM argument");
+      }
+    }
     if (account.type === "yggdrasil") {
       // authlib-injector rewires the game's auth endpoints to the external
       // Yggdrasil server so the player name shows in the main menu and the

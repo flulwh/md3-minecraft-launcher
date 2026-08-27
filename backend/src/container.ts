@@ -9,6 +9,7 @@ import { VersionManifestService } from "./core/version/version-manifest.js";
 import { VersionMetadataStore } from "./core/version/version-metadata-store.js";
 import { VersionResolver } from "./core/version/version-resolver.js";
 import { DownloadManager } from "./core/download/download-manager.js";
+import { attachDownloadPersistence, resumeInterruptedDownloads } from "./core/download/download-persistence.js";
 import { AssetService } from "./core/assets/asset-service.js";
 import { YggdrasilAuthService } from "./core/authentication/yggdrasil-auth-service.js";
 import { TokenCipher } from "./core/authentication/token-cipher.js";
@@ -109,6 +110,11 @@ export class AppContainer {
       config.env.MIRROR as MirrorMode,
     );
     wireDownloadEvents(this.downloadManager, this.bus);
+    attachDownloadPersistence(
+      this.downloadManager,
+      this.db,
+      this.logger.child({ module: "download-persistence" }),
+    );
 
     // --- authentication
     this.cipher = TokenCipher.create(config.env.LAUNCHER_SECRET, config.dataDir);
@@ -172,5 +178,14 @@ export class AppContainer {
     );
 
     this.ws = new WebSocketManager(this.bus, this.logger.child({ module: "ws" }));
+  }
+
+  /** Rebuilds the download queue from tasks interrupted by a previous shutdown/crash. */
+  async resumeDownloads(): Promise<number> {
+    return resumeInterruptedDownloads(
+      this.downloadManager,
+      this.db,
+      this.logger.child({ module: "download-resume" }),
+    );
   }
 }

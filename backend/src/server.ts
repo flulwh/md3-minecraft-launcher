@@ -9,6 +9,14 @@ async function main(): Promise<void> {
   const container = new AppContainer(config);
   await container.db.connect();
 
+  // Rebuild the download queue from tasks interrupted by a prior shutdown/crash.
+  try {
+    const resumed = await container.resumeDownloads();
+    if (resumed > 0) container.logger.info({ resumed }, "download queue restored");
+  } catch (err) {
+    container.logger.error({ err }, "failed to resume interrupted downloads");
+  }
+
   const app = await buildApp(container);
 
   const shutdown = async (signal: string): Promise<void> => {

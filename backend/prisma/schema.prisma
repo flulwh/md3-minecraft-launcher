@@ -57,6 +57,7 @@ model Instance {
   updatedAt        DateTime        @updatedAt
   sessions         LaunchSession[]
   contentOverrides ContentOverride[]
+  installedContents InstalledContent[]
 }
 
 model JavaRuntimeRecord {
@@ -88,16 +89,61 @@ model ContentOverride {
 }
 
 model DownloadTaskRecord {
-  id          String    @id
-  kind        String
-  url         String
-  targetPath  String
-  status      String
-  bytesTotal  Int?
-  bytesDone   Int       @default(0)
-  error       String?
-  createdAt   DateTime  @default(now())
-  finishedAt  DateTime?
+  id            String    @id
+  kind          String
+  url           String
+  targetPath    String
+  status        String
+  bytesTotal    Int?
+  bytesDone     Int       @default(0)
+  error         String?
+  /// expected integrity hash source (sha1 | sha512)
+  hashAlgorithm String?
+  hashValue     String?
+  /// download source label, e.g. official | bmclapi | modrinth | curseforge
+  provider      String?
+  priority      Int       @default(0)
+  retryCount    Int       @default(0)
+  /// full ordered mirror list (JSON array) so a task can be resumed after restart
+  urlsJson      String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  finishedAt    DateTime?
+
+  @@index([status, updatedAt])
+}
+
+/// Catalog entry for a marketplace ({Modrinth | CurseForge}) project. Imported
+/// lazily on first install; lets us track install source, update and sync.
+model MarketItem {
+  id          String    @id @default(cuid())
+  /// modrinth | curseforge
+  source      String
+  sourceId    String
+  name        String
+  /// mod | resourcepack | shaderpack | datapack | modpack
+  type        String
+  author      String?
+  lastVersionId String?
+  lastFileName  String?
+  installedAt DateTime  @default(now())
+  installed   InstalledContent[]
+}
+
+/// Records that a marketplace project was installed into an instance (or
+/// instance-less for modpacks), enabling update / uninstall / sync.
+model InstalledContent {
+  id           String     @id @default(cuid())
+  instanceId   String?
+  marketItemId String
+  kind         String
+  fileName     String
+  versionId    String?
+  installedAt  DateTime   @default(now())
+  marketItem   MarketItem @relation(fields: [marketItemId], references: [id], onDelete: Cascade)
+  instance     Instance?  @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+
+  @@index([instanceId])
 }
 
 model LaunchSession {

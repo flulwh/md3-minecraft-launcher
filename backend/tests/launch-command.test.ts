@@ -1,6 +1,11 @@
 import { describe, it, expect } from "vitest";
 import path from "node:path";
-import { LaunchCommandBuilder } from "../src/core/launch/launch-command-builder.js";
+import {
+  LaunchCommandBuilder,
+  assertSafeLaunchJvmArg,
+  assertSafeGameArg,
+  LaunchSecurityError,
+} from "../src/core/launch/launch-command-builder.js";
 import { ClasspathBuilder } from "../src/core/classpath/classpath-builder.js";
 import {
   substituteVariables,
@@ -69,6 +74,84 @@ describe("LaunchCommandBuilder", () => {
         cwd: ".",
       }),
     ).toThrow();
+  });
+
+  it("refuses to override guarded env vars via extraEnv", () => {
+    expect(() =>
+      builder.build({
+        javaPath: "java",
+        jvmArgs: [],
+        mainClass: "m",
+        gameArgs: [],
+        cwd: ".",
+        extraEnv: { PATH: "/malicious" },
+      }),
+    ).toThrow(LaunchSecurityError);
+    expect(() =>
+      builder.build({
+        javaPath: "java",
+        jvmArgs: [],
+        mainClass: "m",
+        gameArgs: [],
+        cwd: ".",
+        extraEnv: { JAVA_HOME: "/evil" },
+      }),
+    ).toThrow(LaunchSecurityError);
+  });
+
+  it("allows benign extra env vars", () => {
+    const cmd = builder.build({
+      javaPath: "java",
+      jvmArgs: [],
+      mainClass: "m",
+      gameArgs: [],
+      cwd: ".",
+      extraEnv: { MY_LAUNCHER_MODE: "fabric" },
+    });
+    expect(cmd.env["MY_LAUNCHER_MODE"]).toBe("fabric");
+  });
+});
+
+describe("launch argument allow-list", () => {
+  const allowedJvm = [
+    "-Xmx2G",
+    "-Xms512M",
+    "-XX:+UseG1GC",
+    "-XX:MaxGCPauseMillis=50",
+    "-Dlog4j2.formatMsgNoLookups=true",
+    "-ea",
+    "-Dfile.encoding=UTF-8",
+  ];
+  const deniedJvm = [
+    "-javaagent:evil.jar=default",
+    "-agentlib:jdwp=transport=dt_socket,server=y",
+    "-agentpath:/tmp/lib.so",
+    "-Xbootclasspath/a:/tmp/x",
+    "-jar",
+    "-cp",
+    "-classpath",
+  ];
+
+  for (const ok of allowedJvm) {
+    it(`accepts JVM arg ${ok}`, () => expect(() => assertSafeLaunchJvmArg(ok)).not.toThrow());
+  }
+  for (const bad of deniedJvm) {
+    it(`rejects JVM arg ${bad}`, () => {
+      expect(() => assertSafeLaunchJvmArg(bad)).toThrow(LaunchSecurityError);
+    });
+  }
+
+  it("allows normal game args", () => {
+    for (const arg of ["--server", "mc.example.com", "--width", "1280", "Steve"]) {
+      expect(() => assertSafeGameArg(arg)).not.toThrow();
+    }
+  });
+
+  it("rejects JVM-smuggling game args and control characters", () => {
+    expect(() => assertSafeGameArg("-javaagent:evil.jar")).toThrow(LaunchSecurityError);
+    expect(() => assertSafeGameArg("-Xmx1G")).toThrow(LaunchSecurityError);
+    expect(() => assertSafeGameArg("-Dfoo=bar")).toThrow(LaunchSecurityError);
+    expect(() => assertSafeGameArg("evil\nflag")).toThrow(LaunchSecurityError);
   });
 });
 

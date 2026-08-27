@@ -5,8 +5,9 @@ import { EventEmitter } from "node:events";
 import { AppConfig } from "../../config/env.js";
 import { Logger } from "../../config/logger.js";
 import { HttpClient } from "../../infrastructure/http/http-client.js";
-import { sha1File } from "../../utils/hash.js";
+import { hashFile } from "../../utils/hash.js";
 import {
+  ChecksumAlgorithm,
   DownloadKind,
   DownloadRequest,
   DownloadStatus,
@@ -55,6 +56,7 @@ export class DownloadTask {
 
   private readonly samples: SpeedSample[] = [];
   private lastEmitAt = 0;
+  private attemptsValue = 0;
 
   constructor(
     id: string,
@@ -79,6 +81,7 @@ export class DownloadTask {
   }
 
   snapshot(): DownloadTaskSnapshot {
+    const expected = this.expectedChecksum();
     return {
       taskId: this.id,
       kind: this.request.kind,
@@ -89,8 +92,23 @@ export class DownloadTask {
       progressPct: this.progressPct(),
       speedBps: this.speedBps(),
       etaSec: this.etaSec(),
+      retryCount: this.attemptsValue,
+      ...(this.request.urls.length > 0 ? { urls: this.request.urls } : {}),
+      ...(this.request.urls[0] !== undefined ? { url: this.request.urls[0] } : {}),
+      ...(this.request.provider !== undefined ? { provider: this.request.provider } : {}),
+      ...(this.request.priority !== undefined ? { priority: this.request.priority } : {}),
+      ...(expected !== null
+        ? { hashAlgorithm: expected.algorithm, hashValue: expected.value }
+        : {}),
       ...(this.errorValue !== undefined ? { error: this.errorValue } : {}),
     };
+  }
+
+  /** Resolves the integrity hash the artifact must match, if any. */
+  private expectedChecksum(): { algorithm: ChecksumAlgorithm; value: string } | null {
+    if (this.request.checksum) return this.request.checksum;
+    if (this.request.sha1) return { algorithm: "sha1", value: this.request.sha1 };
+    return null;
   }
 
   progressPct(): number {
@@ -205,6 +223,7 @@ export class DownloadTask {
         }
 
         attempt += 1;
+        this.attemptsValue = attempt;
         if (attempt >= MAX_ATTEMPTS_PER_URL) {
           if (urlIndex < this.request.urls.length - 1) {
             urlIndex += 1;
@@ -266,7 +285,8 @@ export class DownloadTask {
       }
 
       const resumed = res.status === 206 && offset > 0;
-      const hash: crypto.Hash | null = this.request.sha1 ? crypto.createHash("sha1") : null;
+      const expected = this.expectedChecksum();
+      const hash: crypto.Hash | null = expected ? crypto.createHash(expected.algorithm) : null;
 
       let writeStream: fs.WriteStream;
       if (resumed) {
@@ -305,11 +325,11 @@ export class DownloadTask {
         writeStream.on("finish", () => {
           if (settled) return;
 
-          if (this.request.sha1 && hash) {
+          if (expected && hash) {
             const actual = hash.digest("hex");
-            if (actual.toLowerCase() !== this.request.sha1.toLowerCase()) {
+            if (actual.toLowerCase() !== expected.value.toLowerCase()) {
               failOnce(new DownloadVerificationError(
-                `SHA1 mismatch for ${path.basename(this.request.dest)}: expected ${this.request.sha1}, got ${actual}`,
+                `Hash mismatch for ${path.basename(this.request.dest)}: expected ${expected.value}, got ${actual}`,
               ));
               return;
             }
@@ -374,11 +394,12 @@ export class DownloadTask {
       if (st.size === 0) return false;
       if (this.request.size !== undefined && st.size !== this.request.size) return false;
       // A size match alone is not enough: a file can be corrupted but same length.
-      // Only trust an existing file when we can verify its SHA1 (when one is
+      // Only trust an existing file when we can verify its checksum (when one is
       // expected), mirroring the verification done on the download path.
-      if (this.request.sha1) {
-        const actual = await sha1File(this.request.dest);
-        if (actual.toLowerCase() !== this.request.sha1.toLowerCase()) return false;
+      const expected = this.expectedChecksum();
+      if (expected) {
+        const actual = await hashFile(this.request.dest, expected.algorithm);
+        if (actual.toLowerCase() !== expected.value.toLowerCase()) return false;
       }
       return true;
     } catch {
