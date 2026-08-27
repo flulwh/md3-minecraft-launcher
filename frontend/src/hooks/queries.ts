@@ -1,9 +1,16 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { accountsApi } from "../api/accountsApi";
+import { contentApi } from "../api/contentApi";
 import { instancesApi } from "../api/instancesApi";
 import { downloadsApi, healthApi, launchApi, settingsApi } from "../api/launcherApi";
 import { javaApi, loadersApi, versionsApi, type VersionsFilter } from "../api/systemApi";
-import type { InstanceCreateInput, InstancePatchInput, SettingsPayload, YggdrasilLoginInput } from "../api/types";
+import type {
+  ContentKind,
+  InstanceCreateInput,
+  InstancePatchInput,
+  SettingsPayload,
+  YggdrasilLoginInput,
+} from "../api/types";
 
 export const qk = {
   health: ["health"] as const,
@@ -18,6 +25,8 @@ export const qk = {
   liveSessions: ["sessions", "live"] as const,
   historySessions: ["sessions", "history"] as const,
   settings: ["settings"] as const,
+  content: (id: string, kind: ContentKind) => ["instances", id, "content", kind] as const,
+  contentDir: (id: string, kind: ContentKind) => ["instances", id, "content", kind, "dir"] as const,
 };
 
 export function useHealth() {
@@ -172,5 +181,49 @@ export function useSaveSettings() {
   return useMutation({
     mutationFn: (patch: SettingsPayload) => settingsApi.update(patch),
     onSuccess: (data) => qc.setQueryData(qk.settings, data),
+  });
+}
+
+// ---- instance content (mods / resourcepacks / shaderpacks) ----
+
+export function useContent(instanceId: string | undefined, kind: ContentKind) {
+  return useQuery({
+    queryKey: qk.content(instanceId ?? "", kind),
+    queryFn: () => contentApi.list(instanceId as string, kind),
+    enabled: Boolean(instanceId),
+  });
+}
+
+export function useContentDir(instanceId: string | undefined, kind: ContentKind) {
+  return useQuery({
+    queryKey: qk.contentDir(instanceId ?? "", kind),
+    queryFn: () => contentApi.dir(instanceId as string, kind),
+    enabled: Boolean(instanceId),
+    staleTime: Infinity,
+  });
+}
+
+export function useToggleContent(instanceId: string, kind: ContentKind) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ fileName, enabled }: { fileName: string; enabled: boolean }) =>
+      contentApi.toggle(instanceId, kind, fileName, enabled),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: qk.content(instanceId, kind) }),
+  });
+}
+
+export function useRemoveContent(instanceId: string, kind: ContentKind) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (fileName: string) => contentApi.remove(instanceId, kind, fileName),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: qk.content(instanceId, kind) }),
+  });
+}
+
+export function useUploadContent(instanceId: string, kind: ContentKind) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (file: File) => contentApi.import(instanceId, kind, file),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: qk.content(instanceId, kind) }),
   });
 }

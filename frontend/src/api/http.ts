@@ -21,7 +21,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     res = await fetch(API_BASE + path, {
       ...init,
       headers: {
-        ...(init?.body ? { "Content-Type": "application/json" } : {}),
+        // Only set a JSON content-type for string bodies; FormData/Blob bodies
+        // get their multipart boundary set by the browser automatically.
+        ...(typeof init?.body === "string" ? { "Content-Type": "application/json" } : {}),
         ...(init?.headers ?? {}),
       },
     });
@@ -61,4 +63,7 @@ export const http = {
       body: body !== undefined ? JSON.stringify(body) : undefined,
     }),
   del: <T>(path: string): Promise<T> => request<T>(path, { method: "DELETE" }),
+  /** Raw multipart/form-data upload; the browser sets the boundary. */
+  upload: <T>(path: string, formBody: FormData): Promise<T> =>
+    request<T>(path, { method: "POST", body: formBody }),
 };

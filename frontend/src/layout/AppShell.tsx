@@ -2,7 +2,7 @@ import Box from "@mui/material/Box";
 import Snackbar from "@mui/material/Snackbar";
 import { useEffect } from "react";
 import { Outlet, useNavigate } from "react-router-dom";
-import type { DownloadProgressData, EventEnvelope } from "../api/types";
+import type { ContentKind, DownloadProgressData, EventEnvelope } from "../api/types";
 import { CommandPalette } from "./CommandPalette";
 import { Sidebar } from "./Sidebar";
 import { StatusBar } from "./StatusBar";
@@ -95,6 +95,13 @@ function dispatchWsEvent(env: EventEnvelope, qc: ReturnType<typeof useQueryClien
     case "java.scan.done":
       void qc.invalidateQueries({ queryKey: qk.java });
       break;
+    case "content.changed": {
+      const kind = (env.data as { kind: ContentKind }).kind;
+      if (env.instanceId && kind) {
+        void qc.invalidateQueries({ queryKey: qk.content(env.instanceId, kind) });
+      }
+      break;
+    }
     default:
       break;
   }

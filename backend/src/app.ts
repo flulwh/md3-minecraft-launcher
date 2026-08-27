@@ -1,6 +1,7 @@
 import Fastify, { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import websocket from "@fastify/websocket";
 import cors from "@fastify/cors";
+import multipart from "@fastify/multipart";
 import { ZodError } from "zod";
 import WebSocket from "ws";
 import { AppContainer } from "./container.js";
@@ -16,6 +17,7 @@ import { javaRoutes } from "./api/routes/java.js";
 import { loaderRoutes } from "./api/routes/loaders.js";
 import { launchRoutes } from "./api/routes/launch.js";
 import { settingsRoutes } from "./api/routes/settings.js";
+import { contentRoutes } from "./api/routes/content.js";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -52,6 +54,12 @@ export async function buildApp(c: AppContainer): Promise<FastifyInstance> {
     options: { maxPayload: 1024 * 1024 },
   });
 
+  // Local file import (drag-and-drop) for instance content. Body parts are
+  // streamed to disk rather than buffered, so the server bodyLimit is not hit.
+  await app.register(multipart, {
+    limits: { fileSize: 512 * 1024 * 1024, files: 1 },
+  });
+
   // ---- WebSocket gateway
   app.get("/ws", { websocket: true }, (socket: WebSocket, req) => {
     try {
@@ -72,6 +80,7 @@ export async function buildApp(c: AppContainer): Promise<FastifyInstance> {
   void loaderRoutes(app, c);
   void launchRoutes(app, c);
   void settingsRoutes(app, c);
+  void contentRoutes(app, c);
 
   // ---- structured error mapping (no stack traces in production)
   app.setErrorHandler((error: Error & Record<string, unknown>, req: FastifyRequest, reply: FastifyReply) => {

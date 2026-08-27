@@ -19,6 +19,7 @@ export const Events = {
   MINECRAFT_EXIT: "minecraft.exit",
   MINECRAFT_CRASH: "minecraft.crash",
   INSTANCE_UPDATED: "instance.updated",
+  CONTENT_CHANGED: "content.changed",
   JAVA_SCAN_DONE: "java.scan.done",
 } as const;
 

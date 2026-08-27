@@ -1,5 +1,19 @@
 export type LoaderId = "vanilla" | "fabric" | "forge" | "neoforge" | "quilt";
 
+/** Directory-scoped instance content that can be listed/toggled/deleted. */
+export type ContentKind = "mod" | "resourcepack" | "shaderpack";
+
+export interface ContentEntry {
+  fileName: string;
+  size: number;
+  mtimeMs: number;
+  enabled: boolean;
+}
+
+export interface ContentDirResult {
+  dir: string;
+}
+
 export interface ApiEnvelope<T> {
   success: true;
   data: T;

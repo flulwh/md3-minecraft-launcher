@@ -24,6 +24,7 @@ import { LoaderChip } from "../design-system/LoaderChip";
 import { StateView } from "../design-system/StateView";
 import { LogViewer } from "../components/LogViewer";
 import { LaunchButton } from "../components/LaunchButton";
+import { ContentListPanel } from "../components/ContentListPanel";
 import { wsClient } from "../ws/wsClient";
 import {
   useDeleteInstance,
@@ -38,19 +39,24 @@ import { launchStore } from "../stores/launchStore";
 import { repairStore } from "../stores/repairStore";
 import { toast } from "../stores/toastStore";
 
-type DetailTab = "overview" | "log" | "settings";
+type DetailTab = "overview" | "mods" | "resourcepacks" | "log" | "settings";
 
 export function InstanceDetailPage() {
   const { id } = useParams<{ id: string }>();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const instance = useInstance(id);
+  const tabFromQuery = searchParams.get("tab");
   const [tab, setTab] = useState<DetailTab>(
-    searchParams.get("tab") === "settings"
+    tabFromQuery === "settings"
       ? "settings"
-      : searchParams.get("tab") === "log"
+      : tabFromQuery === "log"
         ? "log"
-        : "overview",
+        : tabFromQuery === "mods"
+          ? "mods"
+          : tabFromQuery === "resourcepacks"
+            ? "resourcepacks"
+            : "overview",
   );
   const [confirmDelete, setConfirmDelete] = useState(false);
 
@@ -164,11 +170,33 @@ export function InstanceDetailPage() {
 
       <Tabs value={tab} onChange={(_e, v: DetailTab) => setTab(v)} sx={{ my: 2 }}>
         <Tab icon={<AppIcon name="info" size={17} />} iconPosition="start" label="概览" value="overview" />
+        <Tab icon={<AppIcon name="extension" size={17} />} iconPosition="start" label="Mods" value="mods" />
+        <Tab icon={<AppIcon name="grid_view" size={17} />} iconPosition="start" label="资源包" value="resourcepacks" />
         <Tab icon={<AppIcon name="terminal" size={17} />} iconPosition="start" label="日志" value="log" />
         <Tab icon={<AppIcon name="tune" size={17} />} iconPosition="start" label="设置" value="settings" />
       </Tabs>
 
       {tab === "overview" && <OverviewTab instanceId={inst.id} />}
+      {tab === "mods" && (
+        <ContentListPanel
+          instanceId={inst.id}
+          kind="mod"
+          icon="extension"
+          title="Mods"
+          subtitle="已安装的模组，关闭后游戏将跳过加载"
+          emptyHint="该实例尚未安装任何 Mod，稍后可从市场一键安装"
+        />
+      )}
+      {tab === "resourcepacks" && (
+        <ContentListPanel
+          instanceId={inst.id}
+          kind="resourcepack"
+          icon="grid_view"
+          title="资源包"
+          subtitle="纹理、音效与界面美化资源包"
+          emptyHint="该实例尚未安装任何资源包"
+        />
+      )}
       {tab === "log" && <LogViewer instanceId={inst.id} />}
       {tab === "settings" && (
         <SettingsForm key={inst.id} inst={inst} onDeleted={() => navigate("/instances")} />

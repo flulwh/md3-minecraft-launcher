@@ -56,6 +56,7 @@ model Instance {
   createdAt        DateTime        @default(now())
   updatedAt        DateTime        @updatedAt
   sessions         LaunchSession[]
+  contentOverrides ContentOverride[]
 }
 
 model JavaRuntimeRecord {
@@ -68,6 +69,22 @@ model JavaRuntimeRecord {
   /// system | managed | explicit
   source         String   @default("system")
   lastVerifiedAt DateTime @default(now())
+}
+
+/// Tracks user enable/disable for content whose real state cannot be derived
+/// purely from a filename suffix (resource packs, shader packs; later datapacks).
+/// worldName defaults to "" for instance-scoped kinds.
+model ContentOverride {
+  id         String   @id @default(cuid())
+  instanceId String
+  /// mod | resourcepack | shaderpack | datapack
+  kind       String
+  fileName   String
+  enabled    Boolean  @default(true)
+  worldName  String   @default("")
+  instance   Instance @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+
+  @@unique([instanceId, kind, fileName, worldName])
 }
 
 model DownloadTaskRecord {

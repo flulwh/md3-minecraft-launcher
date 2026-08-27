@@ -24,6 +24,7 @@ import { InstanceService } from "./services/instance-service.js";
 import { LaunchService } from "./services/launch-service.js";
 import { RepairService } from "./services/repair-service.js";
 import { SettingsService } from "./services/settings-service.js";
+import { ContentManager } from "./core/content/content-service.js";
 import { WebSocketManager } from "./websocket/manager.js";
 
 /**
@@ -61,6 +62,7 @@ export class AppContainer {
   readonly loaders: LoaderRegistry;
   readonly repair: RepairService;
   readonly settings: SettingsService;
+  readonly content: ContentManager;
 
   constructor(config: AppConfig) {
     this.config = config;
@@ -159,6 +161,15 @@ export class AppContainer {
       this.loaders,
     );
     this.settings = new SettingsService(this.db);
+
+    // --- instance content (mods / resource packs / shader packs)
+    this.content = new ContentManager(
+      config,
+      this.db,
+      this.instances,
+      this.bus,
+      this.logger.child({ module: "content" }),
+    );
 
     this.ws = new WebSocketManager(this.bus, this.logger.child({ module: "ws" }));
   }
