@@ -18,6 +18,7 @@ import { loaderRoutes } from "./api/routes/loaders.js";
 import { launchRoutes } from "./api/routes/launch.js";
 import { settingsRoutes } from "./api/routes/settings.js";
 import { contentRoutes } from "./api/routes/content.js";
+import { marketRoutes } from "./api/routes/market.js";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -81,6 +82,7 @@ export async function buildApp(c: AppContainer): Promise<FastifyInstance> {
   void launchRoutes(app, c);
   void settingsRoutes(app, c);
   void contentRoutes(app, c);
+  void marketRoutes(app, c);
 
   // ---- structured error mapping (no stack traces in production)
   app.setErrorHandler((error: Error & Record<string, unknown>, req: FastifyRequest, reply: FastifyReply) => {

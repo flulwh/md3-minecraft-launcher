@@ -114,20 +114,61 @@ model DownloadTaskRecord {
 }
 
 /// Catalog entry for a marketplace ({Modrinth | CurseForge}) project. Imported
-/// lazily on first install; lets us track install source, update and sync.
+/// lazily on first use; lets us track install source, update and sync.
 model MarketItem {
-  id          String    @id @default(cuid())
+  id         String    @id @default(cuid())
   /// modrinth | curseforge
-  source      String
-  sourceId    String
-  name        String
-  /// mod | resourcepack | shaderpack | datapack | modpack
-  type        String
-  author      String?
-  lastVersionId String?
-  lastFileName  String?
-  installedAt DateTime  @default(now())
-  installed   InstalledContent[]
+  provider   String
+  /// provider-internal id (e.g. Modrinth project slug/id)
+  externalId String
+  name       String
+  /// mod | modpack | resourcepack | shader | world
+  type       String
+  slug       String?
+  description String?
+  author     String?
+  iconUrl    String?
+  website    String?
+  downloads  Int       @default(0)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  versions MarketVersion[]
+  installed InstalledContent[]
+
+  @@unique([provider, externalId])
+}
+
+/// A specific downloadable release of a market project (e.g. Sodium 0.5.11 for 1.21).
+model MarketVersion {
+  id                 String     @id @default(cuid())
+  itemId             String
+  item               MarketItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  versionName        String
+  /// comma-separated supported Minecraft versions
+  minecraftVersions  String
+  /// fabric | forge | neoforge | quilt | vanilla | null
+  loader             String?
+  fileUrl            String
+  fileName           String
+  fileSize           Int
+  hashAlgorithm      String?
+  hashValue          String?
+  dependencies       Json?
+  releaseDate        DateTime?
+
+  dependenciesList ContentDependency[]
+}
+
+/// Resolved dependency edges between market versions (e.g. Create -> Fabric API).
+model ContentDependency {
+  id               String         @id @default(cuid())
+  parentVersionId  String
+  dependencyId     String
+  required         Boolean        @default(true)
+  parentVersion    MarketVersion  @relation(fields: [parentVersionId], references: [id], onDelete: Cascade)
+
+  @@index([parentVersionId])
 }
 
 /// Records that a marketplace project was installed into an instance (or
@@ -136,9 +177,11 @@ model InstalledContent {
   id           String     @id @default(cuid())
   instanceId   String?
   marketItemId String
-  kind         String
+  versionId    String
+  /// mod | modpack | resourcepack | shader | world
+  type         String
   fileName     String
-  versionId    String?
+  enabled      Boolean    @default(true)
   installedAt  DateTime   @default(now())
   marketItem   MarketItem @relation(fields: [marketItemId], references: [id], onDelete: Cascade)
   instance     Instance?  @relation(fields: [instanceId], references: [id], onDelete: Cascade)

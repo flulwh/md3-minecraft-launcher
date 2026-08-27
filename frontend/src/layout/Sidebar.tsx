@@ -21,6 +21,7 @@ interface NavItem {
 
 const NAV_ITEMS: NavItem[] = [
   { to: "/", icon: "home", label: "首页" },
+  { to: "/marketplace", icon: "storefront", label: "市场" },
   { to: "/instances", icon: "widgets", label: "实例" },
   { to: "/downloads", icon: "download", label: "下载" },
   { to: "/accounts", icon: "person", label: "账户" },

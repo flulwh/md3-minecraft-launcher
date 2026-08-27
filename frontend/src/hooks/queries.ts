@@ -2,12 +2,18 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { accountsApi } from "../api/accountsApi";
 import { contentApi } from "../api/contentApi";
 import { instancesApi } from "../api/instancesApi";
+import {
+  marketApi,
+  type MarketHomeParams,
+  type MarketSearchParams,
+} from "../api/marketApi";
 import { downloadsApi, healthApi, launchApi, settingsApi } from "../api/launcherApi";
 import { javaApi, loadersApi, versionsApi, type VersionsFilter } from "../api/systemApi";
 import type {
   ContentKind,
   InstanceCreateInput,
   InstancePatchInput,
+  MarketProviderId,
   SettingsPayload,
   YggdrasilLoginInput,
 } from "../api/types";
@@ -27,6 +33,10 @@ export const qk = {
   settings: ["settings"] as const,
   content: (id: string, kind: ContentKind) => ["instances", id, "content", kind] as const,
   contentDir: (id: string, kind: ContentKind) => ["instances", id, "content", kind, "dir"] as const,
+  marketHome: ["market", "home"] as const,
+  marketSearch: (params: MarketSearchParams) => ["market", "search", params] as const,
+  marketItem: (id: string) => ["market", "item", id] as const,
+  marketVersions: (id: string) => ["market", "item", id, "versions"] as const,
 };
 
 export function useHealth() {
@@ -225,5 +235,72 @@ export function useUploadContent(instanceId: string, kind: ContentKind) {
   return useMutation({
     mutationFn: (file: File) => contentApi.import(instanceId, kind, file),
     onSuccess: () => void qc.invalidateQueries({ queryKey: qk.content(instanceId, kind) }),
+  });
+}
+
+// ---- market ----
+
+export function useMarketHome(filters?: MarketHomeParams) {
+  return useQuery({
+    queryKey: ["market", "home", filters ?? {}],
+    queryFn: () => marketApi.home(filters),
+    staleTime: 5 * 60_000,
+  });
+}
+
+export function useMarketSearch(params: MarketSearchParams) {
+  return useQuery({
+    queryKey: qk.marketSearch(params),
+    queryFn: () => marketApi.search(params),
+    enabled: params.q.trim().length > 0,
+    staleTime: 60_000,
+  });
+}
+
+export function useMarketItem(id: string | undefined) {
+  return useQuery({
+    queryKey: qk.marketItem(id ?? ""),
+    queryFn: () => marketApi.item(id as string),
+    enabled: Boolean(id),
+    staleTime: 30 * 60_000,
+  });
+}
+
+export function useMarketVersions(id: string | undefined) {
+  return useQuery({
+    queryKey: qk.marketVersions(id ?? ""),
+    queryFn: () => marketApi.versions(id as string),
+    enabled: Boolean(id),
+    staleTime: 60 * 60_000,
+  });
+}
+
+export function useMarketInstalled(instanceId: string | undefined) {
+  return useQuery({
+    queryKey: ["market", "installed", instanceId ?? ""],
+    queryFn: () => marketApi.installed(instanceId as string),
+    enabled: Boolean(instanceId),
+  });
+}
+
+export function useMarketInstall() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { instanceId: string; provider: MarketProviderId; projectId: string; versionId: string }) =>
+      marketApi.install(input),
+    onSuccess: (_data, vars) => {
+      void qc.invalidateQueries({ queryKey: ["market", "installed", vars.instanceId] });
+    },
+  });
+}
+
+export function useMarketUninstall() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { instanceId: string; provider: MarketProviderId; projectId: string }) =>
+      marketApi.uninstall(input),
+    onSuccess: (_data, vars) => {
+      void qc.invalidateQueries({ queryKey: ["market", "installed", vars.instanceId] });
+    },
   });
 }

@@ -17,7 +17,8 @@ export type ErrorCode =
   | "AUTH_PENDING"
   | "LOADER_INSTALL_FAILED"
   | "PATH_ESCAPES_SANDBOX"
-  | "OFFLINE_UNAVAILABLE";
+  | "OFFLINE_UNAVAILABLE"
+  | "PROVIDER_NOT_CONFIGURED";
 
 export class AppError extends Error {
   readonly code: ErrorCode;

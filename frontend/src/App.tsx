@@ -8,6 +8,9 @@ import { DownloadsPage } from "./pages/DownloadsPage";
 import { HomePage } from "./pages/HomePage";
 import { InstanceDetailPage } from "./pages/InstanceDetailPage";
 import { InstancesPage } from "./pages/InstancesPage";
+import { MarketDetailPage } from "./pages/MarketDetailPage";
+import { MarketplacePage } from "./pages/MarketplacePage";
+import { MarketSearchPage } from "./pages/MarketSearchPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { theme } from "./theme/createAppTheme";
 
@@ -55,6 +58,9 @@ export function App(): React.JSX.Element {
               <Route path="/" element={<HomePage />} />
               <Route path="/instances" element={<InstancesPage />} />
               <Route path="/instances/:id" element={<InstanceDetailPage />} />
+              <Route path="/marketplace" element={<MarketplacePage />} />
+              <Route path="/marketplace/search" element={<MarketSearchPage />} />
+              <Route path="/marketplace/item/:id" element={<MarketDetailPage />} />
               <Route path="/downloads" element={<DownloadsPage />} />
               <Route path="/accounts" element={<AccountsPage />} />
               <Route path="/settings" element={<SettingsPage />} />

@@ -61,7 +61,15 @@ function newHarness() {
   } as unknown as InstanceService;
 
   const bus = new EventBus();
-  const manager = new ContentManager(makeConfig({ instancesDir: root }), db, instances, bus, makeLogger());
+  // Existing list/toggle/remove/import tests don't touch the download path or
+  // market lookup, so lightweight stubs are sufficient here.
+  const downloads = {
+    enqueue: () => {
+      throw new Error("download stub not configured for this test");
+    },
+  } as unknown as import("../src/core/download/download-manager.js").DownloadManager;
+  const market = {} as unknown as import("../src/core/market/market-service.js").MarketService;
+  const manager = new ContentManager(makeConfig({ instancesDir: root }), db, instances, bus, makeLogger(), downloads, market);
   return { manager, modsDir, packsDir, overrides };
 }
 

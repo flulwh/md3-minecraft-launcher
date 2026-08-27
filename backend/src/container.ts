@@ -26,6 +26,7 @@ import { LaunchService } from "./services/launch-service.js";
 import { RepairService } from "./services/repair-service.js";
 import { SettingsService } from "./services/settings-service.js";
 import { ContentManager } from "./core/content/content-service.js";
+import { MarketService } from "./core/market/market-service.js";
 import { WebSocketManager } from "./websocket/manager.js";
 
 /**
@@ -64,6 +65,7 @@ export class AppContainer {
   readonly repair: RepairService;
   readonly settings: SettingsService;
   readonly content: ContentManager;
+  readonly market: MarketService;
 
   constructor(config: AppConfig) {
     this.config = config;
@@ -168,13 +170,18 @@ export class AppContainer {
     );
     this.settings = new SettingsService(this.db);
 
-    // --- instance content (mods / resource packs / shader packs)
+    // --- market (search / detail / versions, cached against upstream rate limits)
+    this.market = new MarketService(this.http, config, this.logger.child({ module: "market" }));
+
+    // --- instance content (mods / resource packs / shader packs) + market install
     this.content = new ContentManager(
       config,
       this.db,
       this.instances,
       this.bus,
       this.logger.child({ module: "content" }),
+      this.downloadManager,
+      this.market,
     );
 
     this.ws = new WebSocketManager(this.bus, this.logger.child({ module: "ws" }));

@@ -287,3 +287,56 @@ export interface RepairProgressData {
   current: number;
   total: number;
 }
+
+// ---- market ----
+
+export type MarketProviderId = "modrinth" | "curseforge";
+
+export type MarketContentType = "mod" | "modpack" | "resourcepack" | "shader" | "world";
+
+export type MarketSortIndex = "relevance" | "downloads" | "updated";
+
+export interface MarketItemSummary {
+  id: string;
+  provider: MarketProviderId;
+  name: string;
+  type: MarketContentType;
+  slug: string | null;
+  description: string | null;
+  author: string | null;
+  iconUrl: string | null;
+  website: string | null;
+  downloads: number;
+}
+
+export interface MarketHome {
+  featured: MarketItemSummary[];
+  popular: MarketItemSummary[];
+  updated: MarketItemSummary[];
+}
+
+export interface MarketVersionHash {
+  algorithm: "sha1" | "sha512";
+  value: string;
+}
+
+export interface MarketVersionDependency {
+  dependencyId: string;
+  name: string | null;
+  versionId: string | null;
+}
+
+export interface MarketVersion {
+  id: string;
+  provider: MarketProviderId;
+  itemId: string;
+  versionName: string;
+  minecraftVersions: string[];
+  loader: string | null;
+  fileUrl: string;
+  fileName: string;
+  fileSize: number;
+  hash: MarketVersionHash | null;
+  dependencies: MarketVersionDependency[];
+  releaseDate: string | null;
+}
