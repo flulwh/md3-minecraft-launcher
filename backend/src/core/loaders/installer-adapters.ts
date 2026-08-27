@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import crypto from "node:crypto";
 import { execFile } from "node:child_process";
 import { AppConfig } from "../../config/env.js";
 import { Logger } from "../../config/logger.js";
@@ -7,7 +8,8 @@ import { HttpClient } from "../../infrastructure/http/http-client.js";
 import { AppError, JavaRuntimeNotFoundError, NotFoundError } from "../../errors/index.js";
 import { VersionMetadataStore } from "../version/version-metadata-store.js";
 import { JavaRuntimeManager } from "../java/java-runtime-manager.js";
-import { urlCandidates, MirrorMode } from "../../infrastructure/mirror/mirrors.js";
+import { urlCandidates, MirrorMode, clientJarMirrorUrls } from "../../infrastructure/mirror/mirrors.js";
+import { parseMavenName, mavenArtifactPath } from "../libraries/maven.js";
 import type { SettingsService } from "../../services/settings-service.js";
 import {
   LoaderVersion,
@@ -81,6 +83,42 @@ async function readZipEntry(zipPath: string, entryName: string): Promise<Buffer 
   } catch {
     return null;
   }
+}
+
+/** Runs a Java CLI (`javaPath <args>`) and rejects on non-zero exit. */
+function execJava(javaPath: string, args: string[]): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    execFile(
+      javaPath,
+      args,
+      { timeout: INSTALL_TIMEOUT_MS, windowsHide: true, maxBuffer: 16 * 1024 * 1024 },
+      (err) => {
+        if (err) {
+          reject(new AppError(
+            "LOADER_INSTALL_FAILED",
+            `Loader client patch failed: ${err.message}`,
+          ));
+        } else resolve();
+      },
+    );
+  });
+}
+
+/** Extracts the `Main-Class` entry from a JAR manifest buffer. */
+function manifestMainClass(manifest: Buffer): string | null {
+  const m = /^Main-Class:\s*(.+)$/m.exec(manifest.toString("utf8"));
+  return m ? m[1]!.trim() : null;
+}
+
+/** SHA1 of a file, as lowercase hex. */
+function sha1File(file: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const hash = crypto.createHash("sha1");
+    const stream = fs.createReadStream(file);
+    stream.on("error", reject);
+    stream.on("data", (d) => hash.update(d));
+    stream.on("end", () => resolve(hash.digest("hex")));
+  });
 }
 
 /**
@@ -269,10 +307,11 @@ abstract class InstallerAdapter implements ModLoaderAdapter {
     fs.writeFileSync(versionFile, JSON.stringify(versionJson, null, 2));
 
     // Also try to extract install_profile.json for processor information
+    let installProfile: Record<string, unknown> | null = null;
     const installProfileBuffer = await readZipEntry(installerDest, "install_profile.json");
     if (installProfileBuffer) {
       try {
-        const installProfile = JSON.parse(installProfileBuffer.toString("utf8"));
+        installProfile = JSON.parse(installProfileBuffer.toString("utf8"));
         // Save install_profile.json alongside version.json for potential processor execution
         fs.writeFileSync(
           path.join(versionDir, "install_profile.json"),
@@ -285,10 +324,18 @@ abstract class InstallerAdapter implements ModLoaderAdapter {
     }
 
     // Try to extract data/client.lzma if present (needed for patching)
+    let clientLzmaPath: string | null = null;
     const clientLzmaBuffer = await readZipEntry(installerDest, "data/client.lzma");
     if (clientLzmaBuffer) {
-      fs.writeFileSync(path.join(versionDir, "client.lzma"), clientLzmaBuffer);
+      clientLzmaPath = path.join(versionDir, "client.lzma");
+      fs.writeFileSync(clientLzmaPath, clientLzmaBuffer);
       this.logger.info({ loader: this.id }, "extracted data/client.lzma");
+    }
+
+    // Forge-family loaders ship the (emptily-URL'd) client jar as a binary
+    // patch against the vanilla game body. Generate it so launch can succeed.
+    if (installProfile && clientLzmaPath) {
+      await this.patchClientJar(installProfile, minecraftVersion, clientLzmaPath);
     }
 
     if (!(await this.validate(actualId))) {
@@ -297,6 +344,179 @@ abstract class InstallerAdapter implements ModLoaderAdapter {
 
     this.logger.info({ loader: this.id, versionId: actualId }, "loader installed via zip extraction");
     return actualId;
+  }
+
+  /**
+   * Produces the loader client jar (`<name>:<version>:client`) that version.json
+   * lists with an empty download URL. It is created by binary-patching the
+   * vanilla client jar with the `data/client.lzma` delta from the installer,
+   * mirroring the installer's client-side processor. The output is placed at
+   * its Maven path in the shared library store so the launch classpath picks it
+   * up (the resolver already skips empty-URL artifacts).
+   */
+  private async patchClientJar(
+    installProfile: Record<string, unknown>,
+    minecraftVersion: string,
+    clientLzmaPath: string,
+  ): Promise<void> {
+    const processors = (installProfile.processors as Array<Record<string, unknown>> | undefined) ?? [];
+    const clientProcessor = processors.find((p) => {
+      const sides = p.sides as string[] | undefined;
+      return Array.isArray(sides) && sides.includes("client");
+    });
+    if (!clientProcessor) {
+      this.logger.debug({ loader: this.id }, "install_profile has no client processor; skipping binary patch");
+      return;
+    }
+
+    const data = installProfile.data as Record<string, unknown> | undefined;
+    const clientOf = (entry: unknown): string => {
+      if (entry && typeof entry === "object" && "client" in entry) {
+        const v = (entry as Record<string, unknown>).client;
+        if (typeof v === "string") return v.replace(/^\[/, "").replace(/\]$/, "");
+      }
+      return "";
+    };
+
+    const patchedCoord = clientOf(data?.["PATCHED"]);
+    const patchedSha = clientOf(data?.["PATCHED_SHA"]);
+    if (!patchedCoord) {
+      this.logger.debug({ loader: this.id }, "no client patch target found in install_profile");
+      return;
+    }
+
+    const coords = parseMavenName(patchedCoord);
+    if (!coords) return;
+    const output = path.join(this.config.librariesDir, mavenArtifactPath(coords));
+
+    // Skip if the output already exists and matches the expected hash.
+    if (fs.existsSync(output)) {
+      if (patchedSha) {
+        try {
+          if ((await sha1File(output)) === patchedSha) return;
+        } catch {
+          // re-patch if the existing file can't be hashed
+        }
+      } else {
+        return;
+      }
+    }
+
+    // The `--clean` input is the vanilla game body (saved as versions/<mc>/<mc>.jar).
+    const cleanJar = path.join(this.config.versionsDir, minecraftVersion, `${minecraftVersion}.jar`);
+    if (!fs.existsSync(cleanJar)) {
+      this.logger.info({ loader: this.id, cleanJar }, "downloading vanilla client jar for binary patching");
+      fs.mkdirSync(path.dirname(cleanJar), { recursive: true });
+      const lastErr = await this.downloadFirstTo(clientJarMirrorUrls(minecraftVersion), cleanJar);
+      if (lastErr !== null) {
+        throw lastErr instanceof Error ? lastErr : new NotFoundError(`Vanilla client jar '${minecraftVersion}'`);
+      }
+    }
+
+    // Ensure the binarypatcher toolchain (processor jar + classpath deps) is present.
+    const jarName = typeof clientProcessor.jar === "string" ? clientProcessor.jar : "";
+    const classpathNames = (clientProcessor.classpath as string[] | undefined) ?? [];
+    const depDest: string[] = [];
+    for (const name of jarName ? [jarName, ...classpathNames] : classpathNames) {
+      depDest.push(await this.downloadMavenJar(name));
+    }
+    const toolJar = depDest[0];
+    if (!toolJar) {
+      throw new AppError("LOADER_INSTALL_FAILED", "Binary patcher jar not resolvable from install_profile");
+    }
+    const classpath = depDest.join(path.delimiter);
+
+    // Resolve the tool's main class from its manifest (fall back to a known default).
+    const manifestBuf = await readZipEntry(toolJar, "META-INF/MANIFEST.MF");
+    const mainClass =
+      (manifestBuf ? manifestMainClass(manifestBuf) : null) ??
+      "net.minecraftforge.binarypatcher.ConsoleTool";
+
+    const javaPath = await this.pickJava();
+    const args = [
+      "-cp",
+      classpath,
+      mainClass,
+      "--clean",
+      cleanJar,
+      "--output",
+      output,
+      "--apply",
+      clientLzmaPath,
+      "--data",
+      "--unpatched",
+      "--store",
+      "--marker",
+      ".forge_patched_minecraft",
+    ];
+    fs.mkdirSync(path.dirname(output), { recursive: true });
+    this.logger.info(
+      { loader: this.id, output, lzma: clientLzmaPath },
+      "binary-patching loader client jar from vanilla game body",
+    );
+    await execJava(javaPath, args);
+
+    if (!fs.existsSync(output)) {
+      throw new AppError("LOADER_INSTALL_FAILED", "Binary patching did not produce a client jar");
+    }
+    if (patchedSha) {
+      const actual = await sha1File(output);
+      if (actual !== patchedSha) {
+        throw new AppError(
+          "LOADER_INSTALL_FAILED",
+          `Patched client jar SHA1 mismatch: expected ${patchedSha}, got ${actual}`,
+        );
+      }
+    }
+    this.logger.info({ loader: this.id, output }, "loader client jar generated");
+  }
+
+  /** Picks an installed Java runtime capable of running loader tooling. */
+  private async pickJava(): Promise<string> {
+    try {
+      const runtimes = await this.javaManager.detectAll();
+      const chosen = this.javaManager.selectForRequirement(runtimes, 17);
+      return chosen.path;
+    } catch (err) {
+      if (err instanceof JavaRuntimeNotFoundError) throw err;
+      throw new JavaRuntimeNotFoundError("A Java runtime is required to patch the loader client jar");
+    }
+  }
+
+  /** Downloads a maven artifact into the shared library store (mirror-aware). */
+  private async downloadMavenJar(mavenName: string): Promise<string> {
+    const coords = parseMavenName(mavenName);
+    if (!coords) {
+      throw new AppError("LOADER_INSTALL_FAILED", `Invalid maven coordinate '${mavenName}'`);
+    }
+    const relPath = mavenArtifactPath(coords);
+    const dest = path.join(this.config.librariesDir, relPath);
+    if (fs.existsSync(dest)) return dest;
+    const mode = await this.getMirrorMode();
+    const canonical = `https://maven.minecraftforge.net/${relPath}`;
+    const lastErr = await this.downloadFirstTo(urlCandidates(canonical, mode), dest);
+    if (lastErr !== null) {
+      throw lastErr instanceof Error ? lastErr : new NotFoundError(mavenName);
+    }
+    return dest;
+  }
+
+  /**
+   * Tries each URL in order until one succeeds, writing the stream to `dest`.
+   * Returns `null` on success, or the last error if every candidate failed.
+   */
+  private async downloadFirstTo(urls: string[], dest: string): Promise<unknown> {
+    let lastErr: unknown;
+    for (const url of urls) {
+      try {
+        await this.streamToFile(url, dest);
+        return null;
+      } catch (err) {
+        lastErr = err;
+        this.logger.debug({ url, err }, "download candidate failed");
+      }
+    }
+    return lastErr;
   }
 
   /** Newly created versions dir entries that match this loader's id. */
