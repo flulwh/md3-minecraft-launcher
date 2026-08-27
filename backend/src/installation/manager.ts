@@ -53,6 +53,10 @@ interface Session {
   stage?: string;
   /** heartbeat used to keep the UI "alive" during phases with no byte progress */
   heartbeat?: ReturnType<typeof setInterval>;
+  /** True for the very first run; resume preserves pending/completedBytes. */
+  firstRun: boolean;
+  /** Whether the loader build already completed in this session (prevents rebuild on resume). */
+  loaderBuilt: boolean;
   trackerOff: () => void;
 }
 
@@ -98,6 +102,11 @@ export class InstallationManager {
     return s !== undefined && !["READY", "FAILED", "CANCELLED", "PAUSED"].includes(s.phase);
   }
 
+  /** Returns true when a session exists (even if paused) — used to block delete. */
+  hasSession(instanceId: string): boolean {
+    return this.sessions.has(instanceId);
+  }
+
   snapshot(instanceId: string): InstallationSnapshot | null {
     const s = this.sessions.get(instanceId);
     if (!s) return null;
@@ -126,6 +135,14 @@ export class InstallationManager {
         409,
       );
     }
+    // If a previous terminal result is still lingering (failed/cancelled), clear
+    // it so the new attempt publishes fresh snapshots instead of reusing the
+    // stale session that hasn't been explicitly consumed by the UI yet.
+    const previous = this.sessions.get(instanceId);
+    if (previous) {
+      previous.trackerOff();
+      this.sessions.delete(instanceId);
+    }
     const onProgress = this.onDownloadProgress(instanceId);
     const onCompleted = this.onTaskCompleted(instanceId);
     this.downloadManager.events.on("progress", onProgress);
@@ -141,6 +158,8 @@ export class InstallationManager {
       control: "run",
       pending: new Map(),
       completedBytes: 0,
+      firstRun: true,
+      loaderBuilt: false,
       ...(opts?.plan !== undefined ? { plan: opts.plan } : {}),
       trackerOff,
     };
@@ -213,15 +232,18 @@ export class InstallationManager {
     if (!(await this.yieldIfStop(instanceId, s))) return;
 
     this.setPhase(instanceId, s, instance.id, "PLANNING");
-    const plan = s.plan ?? (await this.plans.build(instance));
-    s.plan = plan;
-    s.pending = new Map(
-      plan.tasks
-        .filter((t) => !t.cached && t.kind !== "LOADER")
-        .map((t) => [t.path, t.size]),
-    );
-    s.completedBytes = 0;
+    if (s.firstRun) {
+      const plan = s.plan ?? (await this.plans.build(instance));
+      s.plan = plan;
+      s.pending = new Map(
+        plan.tasks
+          .filter((t) => !t.cached && t.kind !== "LOADER")
+          .map((t) => [t.path, t.size]),
+      );
+      s.completedBytes = 0;
+    }
     if (!(await this.yieldIfStop(instanceId, s))) return;
+    s.firstRun = false;
 
     this.publish(instanceId, s);
     const resolved = await this.versions.resolve(versionId);
@@ -229,7 +251,7 @@ export class InstallationManager {
     // PREPARING: materialize the loader (Forge/Fabric/NeoForge binary pack) before
     // game files, so the patched client jar exists for provisioning.
     this.setPhase(instanceId, s, instance.id, "PREPARING");
-    if (instance.loader !== "vanilla" && instance.loaderVersion) {
+    if (instance.loader !== "vanilla" && instance.loaderVersion && !s.loaderBuilt) {
       const adapter = this.loaders.get(instance.loader);
       if (adapter) {
         const loaderVersion = instance.loaderVersion;
@@ -248,6 +270,8 @@ export class InstallationManager {
           // stop the install now so the UI+DB turn CANCELLED instead of waiting
           // minutes on a build that may also be hung.
           this.setStage(s, "正在取消…");
+        } else {
+          s.loaderBuilt = true;
         }
       }
     }
@@ -380,11 +404,14 @@ export class InstallationManager {
       return false;
     }
     if (s.control === "pause") {
-      // pause is only meaningful while downloading; otherwise defer to next boundary
       if (s.phase === "DOWNLOADING") {
         this.setPhase(instanceId, s, instanceId, "PAUSED");
         return false;
       }
+      // Pause outside DOWNLOADING (e.g. PREPARING/INSTALLING): acknowledge in
+      // the message so the user sees "pause requested, will take effect at
+      // download" instead of clicking pause with zero visible feedback. (#13)
+      this.setStage(s, "已请求暂停，将在下载阶段生效…");
     }
     return true;
   }
@@ -395,29 +422,38 @@ export class InstallationManager {
    * writes only to the idempotent global library/version store), or `false`
    * when the build settled with the result in `fn`'s promise. Build errors are
    * re-thrown so the main run loop handles them normally.
+   *
+   * Uses Promise.race instead of a polling interval so cancel is observed
+   * immediately when requested rather than up to 250ms late (#12).
    */
   private async runLoaderBuildWithCancel(
     s: Session,
     fn: () => Promise<unknown>,
   ): Promise<boolean> {
     let buildError: unknown = null;
-    const build = fn().catch((err) => {
+    const buildResult = fn().catch((err) => {
       buildError = err;
+      return null;
     });
-    const wasCancelled = await new Promise<boolean>((resolve) => {
-      const poll = setInterval(() => {
+    let cancelResolve: ((v: true) => void) | null = null;
+    const cancelPromise = new Promise<true>((resolve) => {
+      cancelResolve = resolve;
+    });
+    // Check initial state (race-free if cancel is requested before entering)
+    if (s.control === "cancel") return true;
+    // Periodically re-check the session control at up to 4Hz — combined with
+    // Promise.race on build settling, the user's click is honored within one
+    // tick of the next resolution, not held up by long polling.
+    const tickPromise = new Promise<true>((resolve) => {
+      const id = setInterval(() => {
         if (s.control === "cancel") {
-          clearInterval(poll);
+          clearInterval(id);
           resolve(true);
         }
       }, 250);
-      // build always settles (its rejection is captured above)
-      void build.then(() => {
-        clearInterval(poll);
-        resolve(false);
-      });
     });
-    if (wasCancelled) return true;
+    const wasCancelled = await Promise.race([cancelPromise, tickPromise, buildResult.then(() => false)]);
+    if (wasCancelled === true) return true;
     if (buildError !== null) throw buildError;
     return false;
   }
@@ -470,12 +506,17 @@ export class InstallationManager {
 
   private onDownloadProgress = (instanceId: string) => {
     let timer: ReturnType<typeof setTimeout> | null = null;
-    return () => {
+    return (snap: { dest: string }): void => {
+      const s = this.sessions.get(instanceId);
+      if (!s || s.phase !== "DOWNLOADING") return;
+      // Only react to progress of tasks owned by this install; prevents cross-
+      // instance broadcasting when multiple installs run concurrently (#8).
+      if (!s.pending.has(snap.dest)) return;
       if (!timer) {
         timer = setTimeout(() => {
           timer = null;
-          const s = this.sessions.get(instanceId);
-          if (s && s.phase === "DOWNLOADING") this.publish(instanceId, s);
+          const cs = this.sessions.get(instanceId);
+          if (cs && cs.phase === "DOWNLOADING") this.publish(instanceId, cs);
         }, PROGRESS_FLUSH_MS);
         timer.unref?.();
       }

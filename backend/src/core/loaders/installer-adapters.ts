@@ -273,6 +273,14 @@ abstract class InstallerAdapter implements ModLoaderAdapter {
     // instead of trusting the predicted id.
     const produced = this.discoverInstalledVersion(before);
     if (produced) {
+      // IMPORTANT: The headless --installClient mode in some Forge installers
+      // only generates version.json/libraries but does NOT execute the
+      // binary-patcher processor that creates the Forge patched client jar.
+      // Run the patch step explicitly so the client jar (with the required
+      // `.forge_patched_minecraft` marker) exists before we mark the install
+      // as validated and ready for launch. Without this, launch preflight
+      // fails with "Could not find .forge_patched_minecraft in classloader".
+      await this.ensurePatchedClient(produced);
       if (await this.validate(produced)) {
         this.logger.info({ loader: this.id, versionId: produced }, "loader installed");
         return produced;
@@ -280,10 +288,50 @@ abstract class InstallerAdapter implements ModLoaderAdapter {
       throw new AppError("LOADER_INSTALL_FAILED", `Installer did not produce a usable '${produced}'`);
     }
 
+    await this.ensurePatchedClient(predicted);
     if (!(await this.validate(predicted))) {
       throw new AppError("LOADER_INSTALL_FAILED", `Installer did not produce '${predicted}'`);
     }
     return predicted;
+  }
+
+  /**
+   * Ensures the loader's patched client jar exists and is marked with the
+   * Forge marker entry. Runs the binary-patcher using the installer's
+   * install_profile.json when the headless installer didn't produce the jar
+   * (newer Forge releases skip the binary patch in --installClient mode).
+   */
+  private async ensurePatchedClient(versionId: string): Promise<void> {
+    const versionDir = path.join(this.config.versionsDir, versionId);
+    const installProfilePath = path.join(versionDir, "install_profile.json");
+    if (!fs.existsSync(installProfilePath)) {
+      this.logger.debug({ loader: this.id, versionId }, "no install_profile.json; skipping client patch");
+      return;
+    }
+    let installProfile: Record<string, unknown>;
+    try {
+      installProfile = JSON.parse(fs.readFileSync(installProfilePath, "utf8"));
+    } catch {
+      this.logger.debug({ loader: this.id, versionId }, "install_profile.json not parseable; skipping");
+      return;
+    }
+    // Detect the Minecraft version either from the id (e.g. "1.21.3-forge-53.1.0")
+    // or by looking up inheritsFrom in the version.json.
+    const versionFile = path.join(versionDir, `${versionId}.json`);
+    let minecraftVersion = versionId;
+    try {
+      const vj = JSON.parse(fs.readFileSync(versionFile, "utf8"));
+      if (typeof vj.inheritsFrom === "string") minecraftVersion = vj.inheritsFrom;
+    } catch {
+      /* ignore; fall back to id parsing */
+      const m = /(\d+\.\d+(?:\.\d+)?)/.exec(versionId);
+      if (m) minecraftVersion = m[1]!;
+    }
+    // Locate client.lzma alongside install_profile (both extracted earlier).
+    const clientLzmaPath = path.join(versionDir, "client.lzma");
+    if (fs.existsSync(clientLzmaPath)) {
+      await this.patchClientJar(installProfile, minecraftVersion, clientLzmaPath);
+    }
   }
 
   /**
@@ -393,7 +441,16 @@ abstract class InstallerAdapter implements ModLoaderAdapter {
     const clientOf = (entry: unknown): string => {
       if (entry && typeof entry === "object" && "client" in entry) {
         const v = (entry as Record<string, unknown>).client;
-        if (typeof v === "string") return v.replace(/^\[/, "").replace(/\]$/, "");
+        if (typeof v === "string") {
+          // Some installers wrap scalar tokens in `[ ... ]` and/or `'...'`.
+          // Strip surrounding brackets and single quotes, then trim.
+          return v
+            .replace(/^\[/, "")
+            .replace(/\]$/, "")
+            .replace(/^'+/, "")
+            .replace(/'+$/, "")
+            .trim();
+        }
       }
       return "";
     };

@@ -14,12 +14,13 @@ import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import type { InstanceDto } from "../api/types";
 import { CreateInstanceDialog } from "../components/CreateInstanceDialog";
+import { ImportInstanceDialog } from "../components/ImportInstanceDialog";
 import { InstanceCard } from "../components/InstanceCard";
 import { AppIcon } from "../design-system/AppIcon";
 import { LoaderChip } from "../design-system/LoaderChip";
 import { PageHeader } from "../design-system/PageHeader";
 import { StateView } from "../design-system/StateView";
-import { useHistorySessions, useInstances } from "../hooks/queries";
+import { useHistorySessions, useInstances, useUpdateInstance } from "../hooks/queries";
 import { loaderLabel } from "../lib/format";
 
 type SortKey = "recent" | "name" | "version" | "created";
@@ -32,7 +33,9 @@ export function InstancesPage() {
   const [view, setView] = useState<"grid" | "list">("grid");
   const [sort, setSort] = useState<SortKey>("recent");
   const [loaderFilter, setLoaderFilter] = useState<string>("all");
+  const [tagFilter, setTagFilter] = useState<string>("");
   const [createOpen, setCreateOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
 
   const lastPlayedByInstance = useMemo(() => {
     const map = new Map<string, string>();
@@ -42,6 +45,12 @@ export function InstancesPage() {
     return map;
   }, [history.data]);
 
+  const allTags = useMemo(() => {
+    const set = new Set<string>();
+    for (const i of instances.data ?? []) for (const t of i.tags) set.add(t);
+    return [...set].sort((a, b) => a.localeCompare(b, "zh-CN"));
+  }, [instances.data]);
+
   const filtered = useMemo(() => {
     let list = [...(instances.data ?? [])];
     const q = query.trim().toLowerCase();
@@ -50,22 +59,25 @@ export function InstancesPage() {
         (i) =>
           i.name.toLowerCase().includes(q) ||
           i.minecraftVersion.toLowerCase().includes(q) ||
-          i.loader.toLowerCase().includes(q),
+          i.loader.toLowerCase().includes(q) ||
+          i.tags.some((t) => t.toLowerCase().includes(q)),
       );
     }
     if (loaderFilter !== "all") list = list.filter((i) => i.loader === loaderFilter);
+    if (tagFilter !== "") list = list.filter((i) => i.tags.includes(tagFilter));
     switch (sort) {
       case "name":
-        list.sort((a, b) => a.name.localeCompare(b.name, "zh-CN"));
+        list.sort((a, b) => Number(b.favorite) - Number(a.favorite) || a.name.localeCompare(b.name, "zh-CN"));
         break;
       case "version":
-        list.sort((a, b) => b.minecraftVersion.localeCompare(a.minecraftVersion));
+        list.sort((a, b) => Number(b.favorite) - Number(a.favorite) || b.minecraftVersion.localeCompare(a.minecraftVersion));
         break;
       case "created":
-        list.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+        list.sort((a, b) => Number(b.favorite) - Number(a.favorite) || b.createdAt.localeCompare(a.createdAt));
         break;
       default: {
         list.sort((a, b) => {
+          if (a.favorite !== b.favorite) return a.favorite ? -1 : 1;
           const ta = lastPlayedByInstance.get(a.id) ?? a.createdAt;
           const tb = lastPlayedByInstance.get(b.id) ?? b.createdAt;
           return tb.localeCompare(ta);
@@ -73,7 +85,7 @@ export function InstancesPage() {
       }
     }
     return list;
-  }, [instances.data, query, loaderFilter, sort, lastPlayedByInstance]);
+  }, [instances.data, query, loaderFilter, tagFilter, sort, lastPlayedByInstance]);
 
   return (
     <Box sx={{ p: 3, maxWidth: 1200, mx: "auto" }}>
@@ -81,9 +93,18 @@ export function InstancesPage() {
         title="实例"
         description="管理你的 Minecraft 实例：版本、加载器、内存与启动"
         actions={
-          <Button variant="contained" startIcon={<AppIcon name="add" filled size={18} />} onClick={() => setCreateOpen(true)}>
-            新建实例
-          </Button>
+          <>
+            <Button
+              variant="text"
+              startIcon={<AppIcon name="upload_file" size={18} />}
+              onClick={() => setImportOpen(true)}
+            >
+              导入
+            </Button>
+            <Button variant="contained" startIcon={<AppIcon name="add" filled size={18} />} onClick={() => setCreateOpen(true)}>
+              新建实例
+            </Button>
+          </>
         }
       />
 
@@ -114,6 +135,20 @@ export function InstancesPage() {
         </Box>
 
         <Box sx={{ flexGrow: 1 }} />
+
+        <Select<string>
+          size="small"
+          value={tagFilter}
+          onChange={(e) => setTagFilter(e.target.value)}
+          aria-label="按标签筛选"
+          displayEmpty
+          sx={{ width: 140 }}
+        >
+          <MenuItem value="">全部标签</MenuItem>
+          {allTags.map((t) => (
+            <MenuItem key={t} value={t}>#{t}</MenuItem>
+          ))}
+        </Select>
 
         <Select<SortKey>
           size="small"
@@ -186,6 +221,7 @@ export function InstancesPage() {
       </StateView>
 
       <CreateInstanceDialog open={createOpen} onClose={() => setCreateOpen(false)} onCreated={() => navigate("/downloads")} />
+      <ImportInstanceDialog open={importOpen} onClose={() => setImportOpen(false)} />
     </Box>
   );
 }
@@ -193,6 +229,7 @@ export function InstancesPage() {
 function InstanceRow({ instance, lastPlayedAt }: { instance: InstanceDto; lastPlayedAt: string | null }) {
   void lastPlayedAt;
   const navigate = useNavigate();
+  const updateInstance = useUpdateInstance(instance.id);
   return (
     <Box
       onClick={() => navigate(`/instances/${instance.id}`)}
@@ -202,7 +239,7 @@ function InstanceRow({ instance, lastPlayedAt }: { instance: InstanceDto; lastPl
       sx={{
         display: "flex",
         alignItems: "center",
-        gap: 2,
+        gap: 1.5,
         px: 2,
         py: 1.25,
         borderBottom: 1,
@@ -212,9 +249,37 @@ function InstanceRow({ instance, lastPlayedAt }: { instance: InstanceDto; lastPl
         "&:hover": { bgcolor: "surfaceContainerHigh" },
       }}
     >
+      <IconButton
+        aria-label={instance.favorite ? "取消收藏" : "收藏"}
+        size="small"
+        color={instance.favorite ? "warning" : "default"}
+        onClick={(e) => {
+          e.stopPropagation();
+          updateInstance.mutate({ favorite: !instance.favorite });
+        }}
+      >
+        <AppIcon name="star" size={18} filled={instance.favorite} />
+      </IconButton>
       <AppIcon name="sports_esports" size={20} />
       <Box sx={{ flex: 1, minWidth: 0 }}>
-        <Typography variant="body2" noWrap sx={{ fontWeight: 600 }}>{instance.name}</Typography>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+          <Typography variant="body2" noWrap sx={{ fontWeight: 600 }}>{instance.name}</Typography>
+          {instance.tags.slice(0, 2).map((t) => (
+            <Chip
+              key={t}
+              size="small"
+              variant="outlined"
+              icon={<AppIcon name="label" size={11} />}
+              label={t}
+              sx={{ height: 20, fontSize: 11 }}
+            />
+          ))}
+          {instance.tags.length > 2 && (
+            <Typography variant="caption" sx={{ color: "text.secondary" }}>
+              +{instance.tags.length - 2}
+            </Typography>
+          )}
+        </Box>
         <Typography variant="caption" sx={{ color: "text.secondary" }}>
           Minecraft {instance.minecraftVersion}
         </Typography>

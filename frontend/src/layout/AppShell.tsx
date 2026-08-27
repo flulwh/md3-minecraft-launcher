@@ -98,8 +98,14 @@ function dispatchWsEvent(env: EventEnvelope, qc: ReturnType<typeof useQueryClien
       break;
     }
     case "minecraft.crash": {
-      const d = env.data as { reason: string; exitCode?: number | null; sessionId: string };
-      launchStore.getState().onCrash(env.instanceId ?? "", d.sessionId, d.reason, d.exitCode ?? null);
+      const d = env.data as import("../api/types").MinecraftCrashData;
+      launchStore.getState().onCrash(
+        env.instanceId ?? "",
+        d.sessionId,
+        d.reason,
+        d.exitCode ?? null,
+        d.diagnosis ?? null,
+      );
       toastStore.getState().push(`Minecraft 异常退出：${d.reason}`, "error");
       void qc.invalidateQueries({ queryKey: qk.liveSessions });
       break;

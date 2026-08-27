@@ -17,6 +17,7 @@ import { javaRoutes } from "./api/routes/java.js";
 import { loaderRoutes } from "./api/routes/loaders.js";
 import { launchRoutes } from "./api/routes/launch.js";
 import { settingsRoutes } from "./api/routes/settings.js";
+import { logsRoutes } from "./api/routes/logs.js";
 import { contentRoutes } from "./api/routes/content.js";
 import { marketRoutes } from "./api/routes/market.js";
 
@@ -81,6 +82,7 @@ export async function buildApp(c: AppContainer): Promise<FastifyInstance> {
   void loaderRoutes(app, c);
   void launchRoutes(app, c);
   void settingsRoutes(app, c);
+  void logsRoutes(app, c);
   void contentRoutes(app, c);
   void marketRoutes(app, c);
 

@@ -4,6 +4,12 @@ import { AppContainer } from "../../container.js";
 import { ok } from "../respond.js";
 import { parseBody } from "./health.js";
 import type { JavaRuntime } from "../../core/java/java-runtime-manager.js";
+import {
+  requiredMajorForVersion,
+  recommendedMajorForVersion,
+  checkJavaCompatibility,
+} from "../../core/java/java-compatibility-engine.js";
+import { parseJavaVersion } from "../../core/java/java-version-parser.js";
 
 const javaPathSchema = z.object({
   path: z.string().min(1).max(512),
@@ -47,7 +53,10 @@ export async function javaRoutes(app: FastifyInstance, c: AppContainer): Promise
     const version = typeof q.version === "string" ? q.version : "";
     const resolved = await c.versions.resolve(version);
     const requiredMajor =
-      resolved.javaVersion?.majorVersion ?? c.java.fallbackMajor(resolved.id);
+      requiredMajorForVersion(resolved.id) ??
+      resolved.javaVersion?.majorVersion ??
+      c.java.fallbackMajor(resolved.id);
+    const recommended = recommendedMajorForVersion(resolved.id);
     let runtimes: JavaRuntime[] = [];
     try {
       runtimes = await c.java.list();
@@ -57,8 +66,21 @@ export async function javaRoutes(app: FastifyInstance, c: AppContainer): Promise
     return ok(reply, {
       versionId: resolved.id,
       requiredMajorVersion: requiredMajor,
+      recommendedMajorVersion: recommended,
       declaredByMetadata: resolved.javaVersion !== undefined,
       compatible: runtimes.filter((r) => r.majorVersion >= requiredMajor),
     });
+  });
+
+  /** POST /api/v1/java/test — probe a path and return a full runtime report. */
+  app.post("/api/v1/java/test", async (req, reply) => {
+    const body = parseBody(
+      z.object({ path: z.string().min(1).max(512), minecraft: z.string().optional() }),
+      req.body,
+    );
+    const rt = await c.java.validatePath(body.path);
+    const structured = rt.versionString ? parseJavaVersion(rt.versionString) : null;
+    const compatibility = body.minecraft ? checkJavaCompatibility(body.minecraft, rt.majorVersion) : undefined;
+    return ok(reply, { runtime: rt, structured, compatibility });
   });
 }

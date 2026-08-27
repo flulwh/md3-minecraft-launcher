@@ -59,6 +59,8 @@ export interface AppConfig {
   assetObjectsDir: string;
   runtimesDir: string;
   logsDir: string;
+  backupsDir: string;
+  exportsDir: string;
 }
 
 function resolveDir(root: string, value: string): string {
@@ -130,6 +132,8 @@ export function loadConfig(rootOverride?: string): AppConfig {
     assetObjectsDir: path.join(assetsDir, "objects"),
     runtimesDir: resolveDir(rootDir, env.DATA_DIR + "/runtimes"),
     logsDir: resolveDir(rootDir, env.DATA_DIR + "/logs"),
+    backupsDir: resolveDir(rootDir, env.DATA_DIR + "/backups"),
+    exportsDir: resolveDir(rootDir, env.DATA_DIR + "/exports"),
   };
 
   cachedConfig = config;
@@ -150,6 +154,8 @@ export function ensureDirectories(config: AppConfig): void {
     config.assetObjectsDir,
     config.runtimesDir,
     config.logsDir,
+    config.backupsDir,
+    config.exportsDir,
   ]) {
     fs.mkdirSync(dir, { recursive: true });
   }

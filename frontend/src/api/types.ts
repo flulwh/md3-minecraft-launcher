@@ -39,6 +39,8 @@ export interface InstanceDto {
   height: number | null;
   fullscreen: boolean;
   serverIp: string | null;
+  tags: string[];
+  favorite: boolean;
   gameDir: string;
   status: string;
   installedAt: string | null;
@@ -60,9 +62,95 @@ export interface InstanceCreateInput {
   height?: number;
   fullscreen?: boolean;
   serverIp?: string;
+  tags?: string[];
+  favorite?: boolean;
 }
 
 export type InstancePatchInput = Partial<InstanceCreateInput>;
+
+// ---- instance backup / export / import / duplicate (v2.0) ----
+
+export type InstanceBackupKind =
+  | "manual"
+  | "prelaunch"
+  | "postlaunch"
+  | "auto"
+  | "beforeDelete";
+
+export interface InstanceBackup {
+  id: string;
+  instanceId: string;
+  kind: string;
+  label: string | null;
+  fileName: string;
+  sizeBytes: number;
+  fileCount: number;
+  createdAt: string;
+}
+
+export interface BackupCreateInput {
+  kind?: InstanceBackupKind;
+  label?: string;
+}
+
+export interface RestoreResult {
+  restored: boolean;
+  fileCount: number;
+}
+
+export interface ExportResult {
+  fileName: string;
+  sizeBytes: number;
+  path: string;
+}
+
+export interface ImportResult {
+  instance: InstanceDto;
+  format: "md3" | "mrpack";
+  fileCount: number;
+  pendingInstall: boolean;
+}
+
+// ---- Phase 8 health / deletion summary ----
+
+export type HealthStatus = "ok" | "warn" | "issue";
+
+export interface HealthCategory {
+  id: string;
+  label: string;
+  status: HealthStatus;
+  message: string;
+}
+
+export interface CorruptFile {
+  file: string;
+  reason: "missing" | "empty" | "size" | "sha1";
+}
+
+export interface HealthReport {
+  instanceId: string;
+  overall: "healthy" | "issues" | "not_installed";
+  categories: HealthCategory[];
+  corruptFiles: CorruptFile[];
+  mods: { total: number; disabled: number };
+  saves: { count: number; sizeBytes: number };
+  at: string;
+}
+
+export interface DiskBreakdown {
+  name: string;
+  sizeBytes: number;
+  fileCount: number;
+}
+
+export interface DeleteSummary {
+  instanceId: string;
+  totalSizeBytes: number;
+  saves: { count: number; sizeBytes: number };
+  hasBackups: boolean;
+  backupCount: number;
+  breakdown: DiskBreakdown[];
+}
 
 export interface MinecraftProfileInfo {
   id: string;
@@ -183,6 +271,54 @@ export interface LiveSession {
   startedAtMs: number;
   endedAtMs: number | null;
   exitCode: number | null;
+  crashReason?: string | null;
+  diagnosis?: CrashDiagnosis | null;
+  crashReportPath?: string | null;
+}
+
+// ---- Process-Supervisor crash diagnosis ------------------------------------
+
+export type CrashSeverity = "fatal" | "warning" | "info";
+
+export interface CrashExitCodeAnalysis {
+  code: number | null;
+  signal: string | null;
+  described: string;
+  severity: CrashSeverity;
+}
+
+export interface CrashFinding {
+  category: string;
+  severity: CrashSeverity;
+  summary: string;
+  detail: string;
+  autoFixable: boolean;
+  suggestedFix?: string;
+}
+
+export interface CrashDiagnosis {
+  exitCode: CrashExitCodeAnalysis;
+  findings: CrashFinding[];
+  headline: CrashFinding;
+  evidence: string[];
+}
+
+/** WebSocket payload for `minecraft.crash`. */
+export interface MinecraftCrashData {
+  reason: string;
+  exitCode: number | null;
+  sessionId: string;
+  diagnosis?: CrashDiagnosis;
+  crashReportPath?: string;
+}
+
+export interface CrashIncidentResponse {
+  status: string;
+  exitCode: number | null;
+  crashReason: string | null;
+  diagnosis: CrashDiagnosis | null;
+  crashReportPath: string | null;
+  crashReport: string | null;
 }
 
 export interface HistorySession {

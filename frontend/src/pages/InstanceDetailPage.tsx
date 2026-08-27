@@ -26,6 +26,9 @@ import { LogViewer } from "../components/LogViewer";
 import { LaunchButton } from "../components/LaunchButton";
 import { ContentListPanel } from "../components/ContentListPanel";
 import { InstallProgressPanel } from "../components/InstallProgressPanel";
+import { BackupPanel } from "../components/BackupPanel";
+import { HealthCard } from "../components/HealthCard";
+import { DiskUsagePanel } from "../components/DiskUsagePanel";
 import { wsClient } from "../ws/wsClient";
 import {
   useDeleteInstance,
@@ -67,6 +70,13 @@ export function InstanceDetailPage() {
     wsClient.subscribe(id);
     return () => wsClient.unsubscribe();
   }, [id]);
+
+  // Scroll to a deep link like `#backup` once its panel has rendered.
+  useEffect(() => {
+    if (!window.location.hash) return;
+    const el = document.getElementById(window.location.hash.slice(1));
+    if (el) el.scrollIntoView({ behavior: "smooth" });
+  }, [tab]);
 
   const deleteInstance = useDeleteInstance();
   const phase = launchStore((s) => (id ? (s.byInstance[id]?.phase ?? "idle") : "idle"));
@@ -219,6 +229,8 @@ export function InstanceDetailPage() {
 
 function AlertCrash({ instanceId }: { instanceId: string }) {
   const crashReason = launchStore((s) => s.byInstance[instanceId]?.crashReason);
+  const diagnosis = launchStore((s) => s.byInstance[instanceId]?.crashDiagnosis);
+  const sessionId = launchStore((s) => s.byInstance[instanceId]?.sessionId);
   return (
     <Box sx={{ mt: 2, p: 1.75, borderRadius: 2, bgcolor: "error.container", color: "error.onContainer" }}>
       <Box sx={{ display: "flex", alignItems: "center", gap: 1, typography: "body2", fontWeight: 600 }}>
@@ -228,8 +240,178 @@ function AlertCrash({ instanceId }: { instanceId: string }) {
       <Typography variant="caption" sx={{ display: "block", mt: 0.5, wordBreak: "break-all" }}>
         {crashReason ?? "未知原因"}
       </Typography>
+      {diagnosis && <CrashDiagnosisPanel instanceId={instanceId} sessionId={sessionId ?? null} diagnosis={diagnosis} />}
     </Box>
   );
+}
+
+/** Severity tag colors shared by the panel. */
+const SEVERITY_COLOR = {
+  fatal: "error",
+  warning: "warning",
+  info: "info",
+} as const;
+
+function CrashDiagnosisPanel({
+  instanceId,
+  sessionId,
+  diagnosis,
+}: {
+  instanceId: string;
+  sessionId: string | null;
+  diagnosis: import("../api/types").CrashDiagnosis;
+}) {
+  const instance = useInstance(instanceId);
+  const updateInstance = useUpdateInstance(instanceId);
+  const [reportOpen, setReportOpen] = useState(false);
+  const [report, setReport] = useState<import("../api/types").CrashIncidentResponse | null>(null);
+  const [reportLoading, setReportLoading] = useState(false);
+  const [fixing, setFixing] = useState(false);
+
+  const openReport = async (): Promise<void> => {
+    setReportOpen(true);
+    if (!sessionId || report) return;
+    setReportLoading(true);
+    try {
+      const { incident } = await import("../api/launcherApi").then((m) => ({ incident: m.launchApi.incident }));
+      setReport(await incident(sessionId));
+    } catch {
+      toast.warning("无法读取崩溃报告");
+    } finally {
+      setReportLoading(false);
+    }
+  };
+
+  // OOM is the one fix we can apply safely with existing instance settings:
+  // bump the per-instance max heap. Everything else surfaces guidance only.
+  const applyFix = async (): Promise<void> => {
+    const inst = instance.data;
+    if (!inst) return;
+    if (diagnosis.headline.category !== "oom") return;
+    setFixing(true);
+    try {
+      const bumped = Math.min(Math.max(inst.memoryMaxMb * 2, 2048), 16384);
+      await updateInstance.mutateAsync({ memoryMaxMb: bumped });
+      toast.success(`已将实例内存上调至 ${bumped} MB`);
+    } catch {
+      toast.error("内存调整失败");
+    } finally {
+      setFixing(false);
+    }
+  };
+
+  const head = diagnosis.headline;
+  const severityColor = SEVERITY_COLOR[head.severity] ?? "error";
+
+  return (
+    <Box sx={{ mt: 1.5, borderRadius: 1.5, bgcolor: "surfaceContainer", p: 1.5 }}>
+      <Box sx={{ display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap" }}>
+        <Chip size="small" color={severityColor} label={severityLabel(head.severity)} />
+        <Typography variant="subtitle2">{head.summary}</Typography>
+        <Chip
+          size="small"
+          variant="outlined"
+          label={diagnosis.exitCode.described}
+          color={diagnosis.exitCode.severity === "fatal" ? "error" : "default"}
+        />
+        {head.autoFixable && (
+          <Chip size="small" color="primary" variant="outlined" icon={<AppIcon name="auto_fix" size={14} />} label="可自动修复" />
+        )}
+      </Box>
+
+      <Typography variant="body2" sx={{ mt: 1, opacity: 0.85 }}>
+        {head.detail}
+      </Typography>
+
+      {head.suggestedFix && (
+        <Typography variant="body2" sx={{ mt: 1 }}>
+          <strong>建议：</strong> {head.suggestedFix}
+        </Typography>
+      )}
+
+      {diagnosis.findings.length > 1 && (
+        <Box sx={{ mt: 1, display: "grid", gap: 0.5 }}>
+          {diagnosis.findings
+            .filter((f) => f.category !== head.category)
+            .slice(0, 3)
+            .map((f) => (
+              <Typography key={f.category} variant="caption" sx={{ display: "block", opacity: 0.8 }}>
+                • {f.summary}
+              </Typography>
+            ))}
+        </Box>
+      )}
+
+      {diagnosis.evidence.length > 0 && (
+        <Box
+          component="pre"
+          sx={{
+            mt: 1.25,
+            maxHeight: 120,
+            overflow: "auto",
+            m: 0,
+            p: 1,
+            borderRadius: 1,
+            bgcolor: "surfaceContainerHigh",
+            fontSize: 11,
+            lineHeight: 1.5,
+            whiteSpace: "pre-wrap",
+            wordBreak: "break-word",
+          }}
+        >
+          {diagnosis.evidence.slice(0, 8).join("\n")}
+        </Box>
+      )}
+
+      <Box sx={{ mt: 1, display: "flex", gap: 1, flexWrap: "wrap" }}>
+        {head.autoFixable && head.category === "oom" && (
+          <Button size="small" variant="contained" onClick={() => void applyFix()} disabled={fixing}>
+            {fixing ? "处理中…" : "一键修复（增大内存）"}
+          </Button>
+        )}
+        {sessionId && (
+          <Button size="small" variant="outlined" onClick={() => void openReport()} disabled={reportLoading}>
+            查看完整报告
+          </Button>
+        )}
+      </Box>
+
+      <Dialog open={reportOpen} onClose={() => setReportOpen(false)} fullWidth maxWidth="md">
+        <DialogTitle>崩溃速查</DialogTitle>
+        <DialogContent>
+          {reportLoading && <Typography variant="body2">读取中…</Typography>}
+          {report?.crashReport && (
+            <Box
+              component="pre"
+              sx={{
+                m: 0,
+                p: 1.5,
+                borderRadius: 1.5,
+                bgcolor: "surfaceContainer",
+                fontSize: 12,
+                lineHeight: 1.6,
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-word",
+                maxHeight: "60vh",
+                overflow: "auto",
+              }}
+            >
+              {report.crashReport}
+            </Box>
+          )}
+          {report && !report.crashReport && (
+            <Typography variant="body2">该会话没有生成详细报告文件。</Typography>
+          )}
+        </DialogContent>
+      </Dialog>
+    </Box>
+  );
+}
+
+function severityLabel(sev: import("../api/types").CrashSeverity): string {
+  if (sev === "fatal") return "致命";
+  if (sev === "warning") return "警告";
+  return "提示";
 }
 
 function OverviewTab({ instanceId }: { instanceId: string }) {
@@ -239,9 +421,19 @@ function OverviewTab({ instanceId }: { instanceId: string }) {
   const inst = instance.data;
   void instanceId;
   return (
-    <Card sx={{ p: 2.5 }}>
+    <>
       <InstallProgressPanel instanceId={instanceId} />
       <Box sx={{ mt: 2.5 }}>
+        <HealthCard instanceId={instanceId} scrollKey="health" />
+      </Box>
+      <Box sx={{ mt: 2.5 }}>
+        <BackupPanel instanceId={instanceId} scrollKey="backup" />
+      </Box>
+      <Box sx={{ mt: 2.5 }}>
+        <DiskUsagePanel instanceId={instanceId} scrollKey="disk" />
+      </Box>
+      <Card sx={{ mt: 2.5, p: 2.5 }}>
+      <Box sx={{ mt: 0 }}>
         {preflight && preflight.length > 0 && (
         <>
           <Typography variant="subtitle2" sx={{ mb: 1 }}>
@@ -309,7 +501,8 @@ function OverviewTab({ instanceId }: { instanceId: string }) {
         </FormRow>
       </Box>
       </Box>
-    </Card>
+      </Card>
+    </>
   );
 }
 
@@ -356,6 +549,8 @@ function SettingsForm({ inst, onDeleted }: SettingsFormProps) {
   const [width, setWidth] = useState(String(inst.width ?? ""));
   const [height, setHeight] = useState(String(inst.height ?? ""));
   const [jvmArgsText, setJvmArgsText] = useState(inst.jvmArgs.join("\n"));
+  const [tags, setTags] = useState<string[]>(inst.tags);
+  const [tagInput, setTagInput] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [repairOpen, setRepairOpen] = useState(false);
 
@@ -367,7 +562,16 @@ function SettingsForm({ inst, onDeleted }: SettingsFormProps) {
     javaPath !== (inst.javaPath ?? "") ||
     jvmArgsText !== inst.jvmArgs.join("\n") ||
     width !== String(inst.width ?? "") ||
-    height !== String(inst.height ?? "");
+    height !== String(inst.height ?? "") ||
+    tags.join("\v") !== inst.tags.join("\v");
+
+  const applyTag = (t: string): void => {
+    const cleaned = t.trim();
+    if (cleaned && cleaned.length <= 32 && tags.length < 32 && !tags.includes(cleaned)) {
+      setTags((prev) => [...prev, cleaned]);
+    }
+    setTagInput("");
+  };
 
   const buildPatch = () => ({
     ...(name.trim() !== inst.name ? { name: name.trim() } : {}),
@@ -378,6 +582,7 @@ function SettingsForm({ inst, onDeleted }: SettingsFormProps) {
     ...(width !== "" && Number(width) >= 320 ? { width: Number(width) } : {}),
     ...(height !== "" && Number(height) >= 240 ? { height: Number(height) } : {}),
     jvmArgs: jvmArgsText.split("\n").map((s) => s.trim()).filter(Boolean),
+    tags: tags.map((t) => t.trim()).filter(Boolean),
   });
 
   const reset = (): void => {
@@ -389,12 +594,49 @@ function SettingsForm({ inst, onDeleted }: SettingsFormProps) {
     setWidth(String(inst.width ?? ""));
     setHeight(String(inst.height ?? ""));
     setJvmArgsText(inst.jvmArgs.join("\n"));
+    setTags(inst.tags);
+    setTagInput("");
   };
 
   return (
     <Card sx={{ p: 2.5 }}>
       <FormRow label="名称" htmlFor="st-name">
         <TextField id="st-name" size="small" fullWidth value={name} onChange={(e) => setName(e.target.value)} />
+      </FormRow>
+
+      <FormRow label="标签" description="用标签归类实例，便于列表筛选与搜索">
+        <Box>
+          <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.75, mb: 1, minHeight: 24 }}>
+            {tags.length === 0 ? (
+              <Typography variant="body2" sx={{ color: "text.secondary" }}>暂无标签</Typography>
+            ) : (
+              tags.map((t) => (
+                <Chip
+                  key={t}
+                  size="small"
+                  variant="outlined"
+                  icon={<AppIcon name="label" size={14} />}
+                  label={t}
+                  onDelete={() => setTags((prev) => prev.filter((x) => x !== t))}
+                />
+              ))
+            )}
+          </Box>
+          <TextField
+            size="small"
+            fullWidth
+            placeholder="输入标签后按回车添加（单个不超过 32 字符，最多 32 个）"
+            value={tagInput}
+            onChange={(e) => setTagInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                applyTag(tagInput);
+              }
+            }}
+            slotProps={{ htmlInput: { maxLength: 32 } }}
+          />
+        </Box>
       </FormRow>
 
       <FormRow label="版本与加载器" description="如需更换，建议新建实例以避免文件冲突">

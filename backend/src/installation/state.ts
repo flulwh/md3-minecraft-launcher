@@ -81,7 +81,10 @@ const ALLOWED: Record<InstallPhase, InstallPhase[]> = {
   INSTALLING: ["FINALIZING", "FAILED", "CANCELLED"],
   FINALIZING: ["READY", "FAILED", "CANCELLED"],
   READY: [],
-  PAUSED: ["DOWNLOADING", "CANCELLED", "FAILED"],
+  // PAUSED can resume into any subsequent phase — not just DOWNLOADING — because
+  // a pause may be captured between phases or even during loader build in
+  // PREPARING. Any of these remains a valid continuation of the same install.
+  PAUSED: ["DOWNLOADING", "INSTALLING", "FINALIZING", "PREPARING", "CANCELLING", "CANCELLED", "FAILED"],
   RETRYING: ["DOWNLOADING", "FAILED", "CANCELLED"],
   CANCELLING: ["CANCELLED", "FAILED"],
   CANCELLED: [],

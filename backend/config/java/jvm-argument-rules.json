@@ -1,0 +1,17 @@
+{
+  "$comment": "JVM argument <-> Java compatibility rules. Each rule lists argument(s) that only exist from a certain Java release onward. Launch strips them when the selected runtime is older (javaMajor < minJava). This prevents \"Unrecognized option\" JVM aborts.",
+  "rules": [
+    {
+      "id": "sun-misc-unsafe-memory-access",
+      "arguments": ["--sun-misc-unsafe-memory-access=allow", "--sun-misc-unsafe-memory-access=deny"],
+      "minJava": 23,
+      "reason": "JDK 23+ only"
+    },
+    {
+      "id": "compact-object-headers",
+      "arguments": ["-XX:+UseCompactObjectHeaders", "-XX:UseCompactObjectHeaders"],
+      "minJava": 24,
+      "reason": "JDK 24+ only"
+    }
+  ]
+}

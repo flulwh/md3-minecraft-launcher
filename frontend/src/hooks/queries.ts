@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
 import { accountsApi } from "../api/accountsApi";
 import { contentApi } from "../api/contentApi";
 import { instancesApi } from "../api/instancesApi";
@@ -33,6 +34,7 @@ export const qk = {
   settings: ["settings"] as const,
   content: (id: string, kind: ContentKind) => ["instances", id, "content", kind] as const,
   contentDir: (id: string, kind: ContentKind) => ["instances", id, "content", kind, "dir"] as const,
+  backups: (id: string) => ["instances", id, "backups"] as const,
   marketHome: ["market", "home"] as const,
   marketSearch: (params: MarketSearchParams) => ["market", "search", params] as const,
   marketItem: (id: string) => ["market", "item", id] as const,
@@ -122,6 +124,83 @@ export function useInstallControl() {
     onSettled: (_data, _error, vars) => {
       void qc.invalidateQueries({ queryKey: qk.instance(vars.id) });
     },
+  });
+}
+
+// ---- v2.0 backup / export / import / duplicate ----
+
+export function useBackups(instanceId: string | undefined) {
+  return useQuery({
+    queryKey: qk.backups(instanceId ?? ""),
+    queryFn: () => instancesApi.backups(instanceId as string),
+    enabled: Boolean(instanceId),
+  });
+}
+
+export function useCreateBackup(instanceId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input?: import("../api/types").BackupCreateInput) =>
+      instancesApi.createBackup(instanceId, input),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: qk.backups(instanceId) }),
+  });
+}
+
+export function useRestoreBackup(instanceId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (backupId: string) => instancesApi.restoreBackup(instanceId, backupId),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: qk.instance(instanceId) }),
+  });
+}
+
+export function useDeleteBackup(instanceId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (backupId: string) => instancesApi.removeBackup(instanceId, backupId),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: qk.backups(instanceId) }),
+  });
+}
+
+export function useDuplicateInstance() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, name }: { id: string; name?: string }) => instancesApi.duplicate(id, name),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: qk.instances }),
+  });
+}
+
+export function useExportInstance() {
+  return useMutation({
+    mutationFn: (id: string) => instancesApi.exportInstance(id),
+  });
+}
+
+export function useImportInstance() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (file: File) => instancesApi.importInstance(file),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: qk.instances }),
+  });
+}
+
+// ---- Phase 8 health / deletion summary ----
+
+export function useInstanceHealth(instanceId: string | undefined) {
+  const [deep, setDeep] = useState(false);
+  const q = useQuery({
+    queryKey: [...qk.instance(instanceId ?? ""), "health", deep] as const,
+    queryFn: () => instancesApi.health(instanceId as string, deep),
+    enabled: Boolean(instanceId),
+  });
+  return { ...q, deep, setDeep };
+}
+
+export function useDeleteSummary(instanceId: string | undefined) {
+  return useQuery({
+    queryKey: [...qk.instance(instanceId ?? ""), "predelete"] as const,
+    queryFn: () => instancesApi.predelete(instanceId as string),
+    enabled: Boolean(instanceId),
   });
 }
 

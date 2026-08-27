@@ -11,7 +11,7 @@ import { DownloadRequest, DownloadTaskSnapshot } from "./types.js";
 
 export type TaskOutcome =
   | { status: "completed"; snapshot: DownloadTaskSnapshot }
-  | { status: "failed" | "cancelled"; snapshot: DownloadTaskSnapshot };
+  | { status: "failed" | "cancelled" | "paused"; snapshot: DownloadTaskSnapshot };
 
 export interface ManagerStats {
   queued: number;
@@ -311,6 +311,8 @@ export function summarize(promises: Promise<TaskOutcome>[]): Promise<BatchResult
       else if (r.status === "failed") {
         batch.failed += 1;
         batch.failures.push({ dest: r.snapshot.dest, error: r.snapshot.error ?? "unknown" });
+      } else if (r.status === "paused") {
+        batch.cancelled += 1; // treat pause as non-terminal "not completed"
       } else batch.cancelled += 1;
     }
     return batch;

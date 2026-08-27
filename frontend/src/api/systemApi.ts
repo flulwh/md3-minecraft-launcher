@@ -15,6 +15,27 @@ export interface VersionsFilter {
   offset?: number;
 }
 
+export type SysLogLevel = "fatal" | "error" | "warn" | "info" | "debug" | "trace";
+
+export interface SystemLogEntry {
+  id: number;
+  time: number;
+  level: SysLogLevel;
+  text: string;
+  module?: string;
+}
+
+export const logsApi = {
+  list: (params: { level?: SysLogLevel; limit?: number; afterId?: number } = {}): Promise<{ logs: SystemLogEntry[] }> => {
+    const sp = new URLSearchParams();
+    if (params.level) sp.set("level", params.level);
+    if (params.limit !== undefined) sp.set("limit", String(params.limit));
+    if (params.afterId !== undefined) sp.set("afterId", String(params.afterId));
+    return http.get(`/api/v1/system/logs?${sp.toString()}`);
+  },
+  clear: (): Promise<{ cleared: boolean; remain: number }> => http.del("/api/v1/system/logs"),
+};
+
 export const versionsApi = {
   list: (filter: VersionsFilter = {}): Promise<VersionsListResponse> => {
     const params = new URLSearchParams();

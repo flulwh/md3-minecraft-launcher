@@ -276,11 +276,25 @@ export class DownloadService {
       (r: TaskOutcome) => r.status !== "completed",
     );
     if (failures.length > 0) {
-      const first = failures[0]!;
-      throw new Error(
-        `${failures.length} download(s) failed; first: ${first.snapshot.dest} — ${first.snapshot.error ?? first.status}`,
-      );
+      throw new BatchDownloadError(failures.map((r) => ({
+        dest: r.snapshot.dest,
+        error: r.snapshot.error ?? r.status,
+      })));
     }
+  }
+}
+
+/** Aggregates multiple download failures so install/launch error messages
+ *  list every failed file instead of only the first one (#6). */
+export class BatchDownloadError extends Error {
+  readonly failures: Array<{ dest: string; error: string }>;
+  constructor(failures: Array<{ dest: string; error: string }>) {
+    const lines = failures
+      .map((f) => `  • ${f.dest}: ${f.error}`)
+      .join("\n");
+    super(`${failures.length} download(s) failed:\n${lines}`);
+    this.name = "BatchDownloadError";
+    this.failures = failures;
   }
 }
 

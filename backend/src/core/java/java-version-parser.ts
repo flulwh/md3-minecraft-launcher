@@ -31,6 +31,42 @@ export function extractMajorVersion(versionString: string): number {
   return Number.isNaN(first) ? 0 : first;
 }
 
+export interface StructuredJavaVersion {
+  major: number;
+  minor: number;
+  patch: number;
+  /** Legacy-update segment only (e.g. "1.8.0_381" -> 381); null for modern schemes. */
+  update: number | null;
+  /** Vendor build suffix, e.g. "+9-LTS" of "17.0.9+9-LTS". */
+  build: string | null;
+  full: string;
+}
+
+/**
+ * Decomposes a Java version string into structured fields.
+ *   "1.8.0_381"  -> { major 8,  minor 0, patch 0, update 381 }
+ *   "17.0.9+9-LTS"-> { major 17, minor 0, patch 9, update null }
+ *   "21.0.8"      -> { major 21, minor 0, patch 8, update null }
+ *   "25"          -> { major 25, minor 0, patch 0, update null }
+ */
+export function parseJavaVersion(versionString: string): StructuredJavaVersion {
+  const trimmed = versionString.trim();
+  const buildMatch = /^([0-9.]+_?[0-9]*)([+].*)?$/.exec(trimmed);
+  const full = trimmed;
+  if (!buildMatch) {
+    return { major: 0, minor: 0, patch: 0, update: null, build: null, full };
+  }
+  const body = buildMatch[1] ?? "";
+  const build = buildMatch[2] ?? null;
+  const parts = body.split(/[._]/).map((s) => Number.parseInt(s, 10));
+  const [a = 0, b = 0, c = 0, d = 0] = parts;
+  if (a === 1) {
+    // legacy "1.<major>.0_<update>" (e.g. 1.8.0_381 -> 8.0.x update 381)
+    return { major: b, minor: c, patch: 0, update: Number.isNaN(d) ? null : d, build, full };
+  }
+  return { major: a, minor: b, patch: c, update: null, build, full };
+}
+
 /**
  * Parses `-XshowSettings:properties -version` output for os.arch / sun.arch.data.model.
  */

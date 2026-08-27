@@ -1,0 +1,10 @@
+{
+  "$comment": "Minecraft <-> Java compatibility table. Rules are matched FIRST whose [minVersion, maxVersion] range contains the Minecraft version; the list must stay sorted with the newest range first. A null bound means unbounded. Compare is numeric by dot-separated segments.",
+  "rules": [
+    { "id": "1.21+", "minVersion": "1.21", "maxVersion": null, "minJava": 21, "recommendedJava": 21 },
+    { "id": "1.20.5-1.20.6", "minVersion": "1.20.5", "maxVersion": "1.20.6", "minJava": 21, "recommendedJava": 21 },
+    { "id": "1.18-1.20.4", "minVersion": "1.18", "maxVersion": "1.20.4", "minJava": 17, "recommendedJava": 17 },
+    { "id": "1.17.x", "minVersion": "1.17", "maxVersion": "1.17.1", "minJava": 16, "recommendedJava": 16 },
+    { "id": "<=1.16.5", "minVersion": null, "maxVersion": "1.16.5", "minJava": 8, "recommendedJava": 8 }
+  ]
+}

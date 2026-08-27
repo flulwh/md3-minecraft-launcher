@@ -55,6 +55,7 @@ export class JavaRuntimeManager {
     this.addFromEnv(candidates);
     await this.addFromPathLookup(candidates);
     this.addWellKnownLocations(candidates);
+    await this.addFromWinRegistry(candidates);
     this.addManagedRuntimes(candidates);
 
     const probes = [...candidates].map((c) => this.probeCandidate(c));
@@ -209,6 +210,40 @@ export class JavaRuntimeManager {
     }
   }
 
+  /**
+   * On Windows, reads JAVA_HOME / JDK_HOME / PATH straight from the registry.
+   *
+   * Node's `process.env` is snapshotted when the process boots, so an
+   * environment change made in System Properties *after* the backend started
+   * is invisible to `addFromEnv`/`addFromPathLookup`. Querying the registry at
+   * detection time picks those up on the next probe without a restart.
+   */
+  private async addFromWinRegistry(candidates: Set<string>): Promise<void> {
+    if (process.platform !== "win32") return;
+    const binName = "java.exe";
+    let env: Record<string, string> = {};
+    try {
+      env = await readWindowsRegistryEnv();
+    } catch {
+      this.logger.debug({}, "failed to read java env from Windows registry");
+      return;
+    }
+    for (const varName of ["JAVA_HOME", "JDK_HOME", "JAVA_HOME_x64", "JAVA_HOME_x86"]) {
+      const home = env[varName];
+      if (home && fs.existsSync(home)) {
+        const bin = path.join(home, "bin", binName);
+        if (fs.existsSync(bin)) candidates.add(bin);
+      }
+    }
+    const pathVar = env["Path"] ?? env["PATH"] ?? "";
+    for (const seg of pathVar.split(";")) {
+      const trimmed = seg.trim();
+      if (!trimmed) continue;
+      const jp = path.join(trimmed, binName);
+      if (fs.existsSync(jp)) candidates.add(jp);
+    }
+  }
+
   private async probeCandidate(candidate: string): Promise<JavaRuntime | null> {
     try {
       const bin = await this.resolveExecutable(candidate);
@@ -282,5 +317,52 @@ async function statOrNull(p: string): Promise<fs.Stats | null> {
     return fs.statSync(p);
   } catch {
     return null;
+  }
+}
+
+const REG_ENV_KEYS = [
+  "HKEY_CURRENT_USER\\Environment",
+  "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+];
+
+/**
+ * Reads the *persisted* user/system environment variables (JAVA_HOME, Path, …)
+ * from the Windows registry via `reg query`. Node's `process.env` only reflects
+ * the environment at launch; this gives us the values the user last saved in
+ * System Properties, merged with user scope taking precedence.
+ */
+async function readWindowsRegistryEnv(): Promise<Record<string, string>> {
+  const merged: Record<string, string> = {};
+  for (const keyPath of REG_ENV_KEYS) {
+    const entries = await queryRegExports(keyPath);
+    for (const [name, value] of entries) {
+      merged[name] = merged[name] ?? value; // first (user) wins
+    }
+  }
+  return merged;
+}
+
+async function queryRegExports(keyPath: string): Promise<Array<[string, string]>> {
+  try {
+    const stdout = await new Promise<string>((resolve, reject) => {
+      execFile(
+        "reg",
+        ["query", keyPath, "/s"],
+        { timeout: 8000, windowsHide: true, encoding: "utf8", maxBuffer: 2 * 1024 * 1024 },
+        (err, out) => {
+          if (err) reject(err);
+          else resolve(out ?? "");
+        },
+      );
+    });
+    if (!stdout) return [];
+    const out: Array<[string, string]> = [];
+    for (const line of stdout.split(/\r?\n/)) {
+      const m = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s+REG_(?:EXPAND_)?SZ\s+(.+)$/.exec(line);
+      if (m) out.push([m[1]!, m[2]!.trim()]);
+    }
+    return out;
+  } catch {
+    return [];
   }
 }

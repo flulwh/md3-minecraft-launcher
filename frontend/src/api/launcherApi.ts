@@ -1,5 +1,6 @@
 import { http } from "./http";
 import type {
+  CrashIncidentResponse,
   DownloadsResponse,
   HistorySession,
   LaunchResult,
@@ -36,6 +37,8 @@ export const launchApi = {
     http.post(`/api/v1/launch/sessions/${sessionId}/stop`),
   kill: (sessionId: string): Promise<unknown> =>
     http.post(`/api/v1/launch/sessions/${sessionId}/kill`),
+  incident: (sessionId: string): Promise<CrashIncidentResponse> =>
+    http.get(`/api/v1/launch/sessions/${sessionId}/incident`),
 };
 
 export const settingsApi = {

@@ -44,6 +44,13 @@ const RUNNING_PHASES: InstallPhase[] = [
   "CANCELLING",
 ];
 
+// Phases where the cancel button should still be shown — including PAUSED, so
+// the user can abandon a paused install without needing to resume first (#5).
+const CANCELABLE_PHASES: InstallPhase[] = [
+  ...RUNNING_PHASES,
+  "PAUSED",
+];
+
 const TERMINAL_PHASES: InstallPhase[] = ["READY", "FAILED", "CANCELLED"];
 
 export function InstallProgressPanel({ instanceId }: { instanceId: string }) {
@@ -135,7 +142,7 @@ export function InstallProgressPanel({ instanceId }: { instanceId: string }) {
             暂停
           </Button>
         )}
-        {running && !TERMINAL_PHASES.includes(snap.phase) && (
+        {CANCELABLE_PHASES.includes(snap.phase) && !TERMINAL_PHASES.includes(snap.phase) && (
           <Button size="small" color="error" startIcon={<AppIcon name="close" size={16} />} onClick={() => setConfirmCancel(true)}>
             取消
           </Button>

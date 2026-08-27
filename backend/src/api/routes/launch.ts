@@ -34,6 +34,22 @@ export async function launchRoutes(app: FastifyInstance, c: AppContainer): Promi
     return ok(reply, result);
   });
 
+  /** GET /api/v1/launch/profile?instanceId=&accountId= — structured launch profile */
+  app.get("/api/v1/launch/profile", async (req, reply) => {
+    const q = req.query as { instanceId?: string; accountId?: string; skipPreflight?: string };
+    if (typeof q.instanceId !== "string" || typeof q.accountId !== "string") {
+      return reply.code(400).send({ error: "instanceId and accountId are required query params" });
+    }
+    const skipPreflight = q.skipPreflight === "1" || q.skipPreflight === "true";
+    const result = await c.launch.launch({
+      instanceId: q.instanceId,
+      accountId: q.accountId,
+      dryRun: true,
+      ...(skipPreflight ? { skipPreflight } : {}),
+    });
+    return ok(reply, { profile: result.profile, compatibility: result.compatibility, removedJvmArgs: result.removedJvmArgs });
+  });
+
   /** GET /api/v1/launch/sessions?live=1 — live processes or persisted history */
   app.get("/api/v1/launch/sessions", async (req, reply) => {
     const q = req.query as { live?: string };
@@ -41,6 +57,30 @@ export async function launchRoutes(app: FastifyInstance, c: AppContainer): Promi
       return ok(reply, { live: true, sessions: c.launch.listSessions() });
     }
     return ok(reply, { live: false, sessions: await c.launch.recentSessions() });
+  });
+
+  /** GET /api/v1/launch/sessions/:sessionId/incident — Process-Supervisor diagnosis */
+  app.get("/api/v1/launch/sessions/:sessionId/incident", async (req, reply) => {
+    const params = parseBody(sessionActionSchema, req.params);
+    const proc = c.processes.get(params.sessionId);
+    if (!proc) return reply.code(404).send({ error: "session not found" });
+    const report = proc.crashReportPath;
+    let reportContent: string | null = null;
+    if (report) {
+      try {
+        reportContent = await import("node:fs/promises").then((fs) => fs.readFile(report, "utf8"));
+      } catch {
+        reportContent = null;
+      }
+    }
+    return ok(reply, {
+      status: proc.status,
+      exitCode: proc.exitCode,
+      crashReason: proc.crashReason,
+      diagnosis: proc.diagnosis ?? null,
+      crashReportPath: report,
+      crashReport: reportContent,
+    });
   });
 
   /** POST /api/v1/launch/sessions/:sessionId/stop */

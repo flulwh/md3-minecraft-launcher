@@ -38,6 +38,8 @@ export const createInstanceSchema = z.object({
   height: z.number().int().min(240).max(16384).optional(),
   fullscreen: z.boolean().optional(),
   serverIp: z.string().max(255).optional(),
+  tags: z.array(z.string().min(1).max(32)).max(32).optional(),
+  favorite: z.boolean().optional(),
 });
 
 export const patchInstanceSchema = createInstanceSchema.partial();
@@ -48,6 +50,15 @@ export const idParamSchema = z.object({
 
 export const repairSchema = z.object({
   deepAssets: z.boolean().optional(),
+});
+
+export const backupSchema = z.object({
+  kind: z.enum(["manual", "prelaunch", "postlaunch", "auto", "beforeDelete"]).optional(),
+  label: z.string().min(1).max(64).optional(),
+});
+
+export const duplicateSchema = z.object({
+  name: z.string().min(1).max(64).optional(),
 });
 
 export const installLoaderSchema = z.object({
@@ -76,4 +87,10 @@ export const updateSettingsSchema = z.object({
   preferredJavaPath: z.string().max(512).nullable().optional(),
   extraJvmArgs: z.array(z.string().max(1024)).max(128).optional(),
   mirrorMode: z.enum(["auto", "official", "bmclapi"]).optional(),
+});
+
+export const listLogsQuerySchema = z.object({
+  level: z.enum(["fatal", "error", "warn", "info", "debug", "trace"]).optional(),
+  limit: z.coerce.number().int().min(1).max(5000).default(1000),
+  afterId: z.coerce.number().int().min(0).optional(),
 });

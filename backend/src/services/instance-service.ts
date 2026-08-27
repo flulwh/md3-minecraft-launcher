@@ -4,8 +4,10 @@ import { z } from "zod";
 import { AppConfig } from "../config/env.js";
 import { Logger } from "../config/logger.js";
 import { Database } from "../infrastructure/database/database.js";
-import { InstanceNotFoundError, ValidationError } from "../errors/index.js";
+import { AppError, InstanceNotFoundError, ValidationError } from "../errors/index.js";
 import { EventBus, Events } from "../websocket/events.js";
+import type { MinecraftProcessManager } from "../core/process/process-manager.js";
+import type { InstallationManager } from "../installation/manager.js";
 
 export const instanceCreateSchema = z.object({
   name: z.string().min(1).max(64),
@@ -21,6 +23,8 @@ export const instanceCreateSchema = z.object({
   height: z.number().int().min(240).max(16384).optional(),
   fullscreen: z.boolean().optional(),
   serverIp: z.string().max(255).optional(),
+  tags: z.array(z.string().min(1).max(32)).max(32).optional(),
+  favorite: z.boolean().optional(),
 });
 
 export const instancePatchSchema = instanceCreateSchema.partial();
@@ -43,6 +47,8 @@ export interface InstanceDto {
   height: number | null;
   fullscreen: boolean;
   serverIp: string | null;
+  tags: string[];
+  favorite: boolean;
   gameDir: string;
   status: string;
   installedAt: string | null;
@@ -63,6 +69,18 @@ export class InstanceService {
     private readonly logger: Logger,
   ) {}
 
+  /** Optional runtime guards, populated after the rest of the app is wired up. */
+  setRuntimeGuards(
+    installs: InstallationManager,
+    processes: MinecraftProcessManager,
+  ): void {
+    this.installs = installs;
+    this.processes = processes;
+  }
+
+  private installs?: InstallationManager;
+  private processes?: MinecraftProcessManager;
+
   async create(input: InstanceCreateInput): Promise<InstanceDto> {
     const row = await this.db.client.instance.create({
       data: {
@@ -79,6 +97,8 @@ export class InstanceService {
         ...(input.height !== undefined ? { height: input.height } : {}),
         ...(input.fullscreen !== undefined ? { fullscreen: input.fullscreen } : {}),
         ...(input.serverIp !== undefined ? { serverIp: input.serverIp } : {}),
+        ...(input.tags !== undefined ? { tags: JSON.stringify(input.tags) } : {}),
+        ...(input.favorite !== undefined ? { favorite: input.favorite } : {}),
       },
     });
     this.prepareDirectories(row.id);
@@ -113,6 +133,8 @@ export class InstanceService {
         ...(patch.height !== undefined ? { height: patch.height } : {}),
         ...(patch.fullscreen !== undefined ? { fullscreen: patch.fullscreen } : {}),
         ...(patch.serverIp !== undefined ? { serverIp: patch.serverIp } : {}),
+        ...(patch.tags !== undefined ? { tags: JSON.stringify(patch.tags) } : {}),
+        ...(patch.favorite !== undefined ? { favorite: patch.favorite } : {}),
       },
     });
     this.bus.publish(Events.INSTANCE_UPDATED, { id, action: "updated" }, id);
@@ -121,6 +143,7 @@ export class InstanceService {
 
   async delete(id: string): Promise<void> {
     await this.require(id);
+    await this.assertIdle(id);
     await this.db.client.instance.delete({ where: { id } });
     // Remove the instance's on-disk game files (including saves) together with
     // the database row. This is destructive and confirmed on the client side.
@@ -129,6 +152,32 @@ export class InstanceService {
     await fs.promises.rm(dir, { recursive: true, force: true });
     this.logger.info({ id }, "instance deleted (files removed)");
     this.bus.publish(Events.INSTANCE_UPDATED, { id, action: "deleted" }, id);
+  }
+
+  /**
+   * Guards file-system mutating operations (delete / backup / restore / export /
+   * duplicate) against a running install session or live Minecraft process.
+   * Wiping or overwriting the instance directory while either is active would
+   * strand a zombie session or corrupt a running game (#2).
+   */
+  async assertIdle(id: string): Promise<void> {
+    if (this.installs && this.installs.hasSession(id)) {
+      throw new AppError(
+        "INSTALL_IN_PROGRESS",
+        "Instance is busy with an install. Cancel the install first.",
+        409,
+      );
+    }
+    if (this.processes) {
+      const running = this.processes.list().some((p) => p.instanceId === id);
+      if (running) {
+        throw new AppError(
+          "LAUNCH_FAILED",
+          "Instance is currently running. Stop the game first.",
+          409,
+        );
+      }
+    }
   }
 
   gameDirectory(instanceId: string): string {
@@ -171,6 +220,8 @@ export class InstanceService {
     height: number | null;
     fullscreen: boolean;
     serverIp: string | null;
+    tags: string | null;
+    favorite: boolean;
     status: string;
     installedAt: Date | null;
     lastError: string | null;
@@ -191,6 +242,8 @@ export class InstanceService {
       height: row.height,
       fullscreen: row.fullscreen,
       serverIp: row.serverIp,
+      tags: parseJsonArray(row.tags),
+      favorite: row.favorite,
       gameDir: this.gameDirectory(row.id),
       status: row.status,
       installedAt: row.installedAt ? row.installedAt.toISOString() : null,

@@ -5,7 +5,6 @@ import IconButton from "@mui/material/IconButton";
 import ListItemIcon from "@mui/material/ListItemIcon";
 import Menu from "@mui/material/Menu";
 import MenuItem from "@mui/material/MenuItem";
-import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -13,7 +12,7 @@ import type { InstanceDto } from "../api/types";
 import { AppIcon } from "../design-system/AppIcon";
 import { ConfirmDialog } from "../design-system/ConfirmDialog";
 import { LoaderChip } from "../design-system/LoaderChip";
-import { useDeleteInstance } from "../hooks/queries";
+import { useDeleteInstance, useDeleteSummary, useDuplicateInstance, useExportInstance, useUpdateInstance } from "../hooks/queries";
 import { previewLaunch, startLaunch, stopSession } from "../lib/actions";
 import { fmtBytes, fmtRelative, loaderLabel } from "../lib/format";
 import { launchStore } from "../stores/launchStore";
@@ -29,7 +28,12 @@ export function InstanceCard({ instance, lastPlayedAt, onEdit }: InstanceCardPro
   const navigate = useNavigate();
   const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmDuplicate, setConfirmDuplicate] = useState(false);
   const deleteInstance = useDeleteInstance();
+  const duplicate = useDuplicateInstance();
+  const exportInstance = useExportInstance();
+  const updateInstance = useUpdateInstance(instance.id);
+  const predelete = useDeleteSummary(confirmDelete ? instance.id : undefined);
   const phase = launchStore((s) => s.byInstance[instance.id]?.phase ?? "idle");
   const runningLike = ["running", "launching"].includes(phase);
 
@@ -64,6 +68,18 @@ export function InstanceCard({ instance, lastPlayedAt, onEdit }: InstanceCardPro
               {instance.loaderVersion ? ` · ${loaderLabel(instance.loader)} ${instance.loaderVersion}` : ""}
             </Typography>
           </Box>
+          <IconButton
+            aria-label={instance.favorite ? "取消收藏" : "收藏"}
+            onClick={(e) => {
+              e.stopPropagation();
+              updateInstance.mutate({ favorite: !instance.favorite });
+            }}
+            size="small"
+            sx={{ flexShrink: 0, color: instance.favorite ? "warning.main" : "text.disabled" }}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <AppIcon name="star" size={18} filled={instance.favorite} />
+          </IconButton>
           <IconButton
             aria-label={`实例「${instance.name}」的更多操作`}
             onClick={(e) => {
@@ -100,6 +116,21 @@ export function InstanceCard({ instance, lastPlayedAt, onEdit }: InstanceCardPro
             )
           )}
         </Box>
+
+        {instance.tags.length > 0 && (
+          <Box sx={{ display: "flex", gap: 0.5, flexWrap: "wrap" }}>
+            {instance.tags.map((t) => (
+              <Chip
+                key={t}
+                size="small"
+                variant="outlined"
+                icon={<AppIcon name="label" size={12} />}
+                label={t}
+                sx={{ height: 20, fontSize: 11, "& .MuiChip-icon": { fontSize: 12 } }}
+              />
+            ))}
+          </Box>
+        )}
 
         <Box sx={{ display: "flex", alignItems: "center", gap: 2 }}>
           <Box sx={{ flex: 1, minWidth: 0 }}>
@@ -178,9 +209,46 @@ export function InstanceCard({ instance, lastPlayedAt, onEdit }: InstanceCardPro
             预检运行环境
           </MenuItem>
         )}
+        <MenuItem onClick={() => { setMenuAnchor(null); updateInstance.mutate({ favorite: !instance.favorite }); }}>
+          <ListItemIcon><AppIcon name="star" size={18} filled={instance.favorite} /></ListItemIcon>
+          {instance.favorite ? "取消收藏" : "收藏"}
+        </MenuItem>
         <MenuItem onClick={() => { setMenuAnchor(null); openGameDir(); }}>
           <ListItemIcon><AppIcon name="folder_open" size={18} /></ListItemIcon>
           打开游戏目录
+        </MenuItem>
+        <MenuItem
+          disabled={runningLike}
+          onClick={() => {
+            setMenuAnchor(null);
+            exportInstance.mutate(instance.id, {
+              onSuccess: (r) => {
+                toast.success(`已导出 ${r.fileName}`);
+                void window.launcher?.revealItem(r.path);
+              },
+              onError: (err) => toast.error(err instanceof Error ? err.message : "导出失败"),
+            });
+          }}
+        >
+          <ListItemIcon><AppIcon name="archive" size={18} /></ListItemIcon>
+          导出为压缩包
+        </MenuItem>
+        <MenuItem
+          disabled={runningLike}
+          onClick={() => {
+            setMenuAnchor(null);
+            navigate(`/instances/${instance.id}?tab=overview#backup`);
+          }}
+        >
+          <ListItemIcon><AppIcon name="backup" size={18} /></ListItemIcon>
+          备份与还原
+        </MenuItem>
+        <MenuItem
+          disabled={runningLike}
+          onClick={() => { setMenuAnchor(null); setConfirmDuplicate(true); }}
+        >
+          <ListItemIcon><AppIcon name="copy_all" size={18} /></ListItemIcon>
+          复制实例
         </MenuItem>
         <MenuItem onClick={() => { setMenuAnchor(null); onEdit?.(instance); navigate(`/instances/${instance.id}?tab=settings`); }}>
           <ListItemIcon><AppIcon name="tune" size={18} /></ListItemIcon>
@@ -204,14 +272,27 @@ export function InstanceCard({ instance, lastPlayedAt, onEdit }: InstanceCardPro
         loading={deleteInstance.isPending}
         message={
           <>
-            将从启动器中移除该实例（Minecraft {instance.minecraftVersion}）。
-            <br />
-            游戏目录中的存档与文件不会被删除：
-            <Tooltip title={instance.gameDir}>
-              <Typography variant="caption" sx={{ wordBreak: "break-all", display: "block", mt: 0.5 }}>
-                {instance.gameDir}
+            <Typography variant="body2" sx={{ color: "error.main", fontWeight: 600, pb: 1 }}>
+              将永久删除本地游戏文件（含存档、配置、Mod 与资源包），此操作无法撤销。
+            </Typography>
+            {predelete.data ? (
+              <Box sx={{ display: "grid", gap: 0.5, pb: 1 }}>
+                <DeleteStat label="占用的文件大小" value={fmtBytes(predelete.data.totalSizeBytes)} />
+                <DeleteStat label="包含的世界" value={`${predelete.data.saves.count} 个`} />
+                <DeleteStat label="本地备份" value={predelete.data.hasBackups ? `${predelete.data.backupCount} 份` : "无"} />
+              </Box>
+            ) : (
+              <Typography variant="caption" sx={{ display: "block", pb: 1, color: "text.secondary" }}>
+                正在统计文件大小…
               </Typography>
-            </Tooltip>
+            )}
+            {predelete.data && predelete.data.saves.count > 0 && (
+              <Typography variant="caption" sx={{ display: "block", color: "warning.main", pb: 1 }}>
+                {predelete.data.hasBackups
+                  ? "如需保留，可先到「备份与还原」手动备份存档。"
+                  : "建议先到「备份与还原」创建一个备份再删除。"}
+              </Typography>
+            )}
           </>
         }
         onConfirm={() =>
@@ -220,6 +301,45 @@ export function InstanceCard({ instance, lastPlayedAt, onEdit }: InstanceCardPro
           })
         }
       />
+
+      <ConfirmDialog
+        open={confirmDuplicate}
+        onClose={() => setConfirmDuplicate(false)}
+        title={`复制实例「${instance.name}」？`}
+        confirmText="复制"
+        loading={duplicate.isPending}
+        message={
+          <>
+            将创建一份完整的副本（含存档、配置与 Mod），
+            新实例名称为「{instance.name} - 副本」。库文件会被复用，不会重复下载。
+          </>
+        }
+        onConfirm={() =>
+          duplicate.mutate(
+            { id: instance.id },
+            {
+              onSuccess: (dup) => {
+                setConfirmDuplicate(false);
+                toast.success(`已创建副本「${dup.name}」`);
+              },
+              onError: (err) => toast.error(err instanceof Error ? err.message : "复制失败"),
+            },
+          )
+        }
+      />
     </>
+  );
+}
+
+function DeleteStat({ label, value }: { label: string; value: string }) {
+  return (
+    <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+      <Typography variant="body2" sx={{ color: "text.secondary" }}>
+        {label}
+      </Typography>
+      <Typography variant="body2" sx={{ fontWeight: 600 }}>
+        {value}
+      </Typography>
+    </Box>
   );
 }

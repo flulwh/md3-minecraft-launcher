@@ -21,6 +21,9 @@ import { LibraryResolver } from "../core/libraries/library-resolver.js";
 import { LoaderRegistry } from "../core/loaders/loader-registry.js";
 import { currentRuntime } from "../utils/runtime-env.js";
 import { AppError, LaunchError } from "../errors/index.js";
+import { applyJvmArgumentRules } from "../core/java/jvm-argument-rules.js";
+import { checkJavaCompatibility, requiredMajorForVersion } from "../core/java/java-compatibility-engine.js";
+import { buildLaunchProfile, LaunchProfile } from "../core/launch/launch-profile.js";
 
 export interface LaunchOptions {
   instanceId: string;
@@ -44,6 +47,19 @@ export interface LaunchResult {
   };
   preflight: PreflightResult;
   pid?: number;
+  /** Java Runtime Compatibility Engine verdict, surfaced to the UI. */
+  compatibility?: {
+    minecraftVersion: string;
+    requiredJava: number;
+    selectedJava: number;
+    compatible: boolean;
+    minJava: number;
+    recommendedJava: number;
+  };
+  /** JVM arguments stripped by the compatibility engine (Java too old for them). */
+  removedJvmArgs?: Array<{ argument: string; minJava: number; reason: string }>;
+  /** Structured launch profile, surfaced for "查看启动命令" previews. */
+  profile?: LaunchProfile;
 }
 
 /**
@@ -57,6 +73,10 @@ export class LaunchService {
   private readonly gameArgs: GameArgumentResolver;
   private readonly jvmArgs: JvmArgumentResolver;
   private readonly preflightChecker: PreflightChecker;
+  /** Per-instance launch mutex — prevents rapid double-click from spawning two
+   *  concurrent launch attempts (race between `isRunning` check and process
+   *  creation, #9). */
+  private readonly launching = new Map<string, true>();
 
   constructor(
     private readonly config: AppConfig,
@@ -82,6 +102,13 @@ export class LaunchService {
   }
 
   async launch(opts: LaunchOptions): Promise<LaunchResult> {
+    // ---- Acquire launch mutex (race-free, same-instance only, #9)
+    if (this.launching.has(opts.instanceId)) {
+      throw new LaunchError("A launch is already in progress for this instance");
+    }
+    this.launching.set(opts.instanceId, true);
+    const releaseLaunch = () => this.launching.delete(opts.instanceId);
+    try {
     // ---- Validate Account
     const account = await this.auth.getPublicAccount(opts.accountId);
     const preflight = this.newPreflight();
@@ -141,6 +168,14 @@ export class LaunchService {
       `Java ${runtime.majorVersion}`,
       true,
       `${runtime.path}${runtime.versionString ? ` (${runtime.versionString})` : ""}`,
+    );
+
+    // ---- Minecraft <-> Java compatibility (Java Runtime Compatibility Engine)
+    const javaCompatibility = checkJavaCompatibility(instance.minecraftVersion, runtime.majorVersion);
+    preflight.add(
+      `Minecraft ↔ Java`,
+      javaCompatibility.compatible,
+      javaCompatibility.reason,
     );
 
     // memory sanity
@@ -248,11 +283,26 @@ export class LaunchService {
       const authlibJar = await this.downloads.ensureAuthlibInjector();
       extraJvmArgs.unshift(`-javaagent:${authlibJar}=${this.config.env.YGG_BASE_URL}`);
     }
-    const jvm = this.jvmArgs.build(resolved.arguments.jvm, vars, env, {
+    let jvm = this.jvmArgs.build(resolved.arguments.jvm, vars, env, {
       ...(instance.memoryMinMb !== null ? { minMemoryMb: instance.memoryMinMb } : {}),
       maxMemoryMb: instance.memoryMaxMb,
       extraJvmArgs,
     });
+
+    // ---- JVM args (compatibility boundary)
+    // Route every argument through the JVM Argument Compatibility Engine. It
+    // strips version-specific flags (from the version profile OR user args) that
+    // the selected Java runtime cannot parse, so the JVM never aborts with
+    // "Unrecognized option" (e.g. --sun-misc-unsafe-memory-access JDK23+,
+    // -XX:+UseCompactObjectHeaders JDK24+).
+    const { args: jvmArgs, removed } = applyJvmArgumentRules(jvm, runtime.majorVersion);
+    jvm = jvmArgs;
+    for (const r of removed) {
+      this.logger.warn(
+        { ruleId: r.ruleId, argument: r.argument, minJava: r.minJava, java: runtime.majorVersion },
+        `Removed incompatible JVM argument '${r.argument}' (needs Java ${r.minJava}+, using Java ${runtime.majorVersion}; ${r.reason})`,
+      );
+    }
 
     // ---- Game args
     const gameArgsList = [
@@ -291,11 +341,40 @@ export class LaunchService {
 
     const sessionId = crypto.randomUUID();
 
+    // ---- Structured launch profile (preview / "view command" tooling)
+    const profile: LaunchProfile = buildLaunchProfile({
+      javaPath: command.javaPath,
+      javaMajor: runtime.majorVersion,
+      javaVendor: runtime.vendor ?? null,
+      jvmArgs: jvm,
+      gameArgs: gameArgsList,
+      mainClass: resolved.mainClass,
+      args: command.args,
+      cwd: command.cwd,
+      env: command.env,
+      minecraftVersion: resolved.id,
+      loaderType: instance.loader,
+      loaderVersion: instance.loaderVersion,
+      memoryMinMb: instance.memoryMinMb,
+      memoryMaxMb: instance.memoryMaxMb,
+      classpathEntryCount: cp.entries.length,
+    });
+
     if (opts.dryRun === true) {
       return {
         sessionId: null,
         command: { javaPath: command.javaPath, args: command.args, cwd: command.cwd },
         preflight: report,
+        compatibility: {
+          minecraftVersion: instance.minecraftVersion,
+          requiredJava: requiredMajor,
+          selectedJava: runtime.majorVersion,
+          compatible: javaCompatibility.compatible,
+          minJava: javaCompatibility.minJava,
+          recommendedJava: javaCompatibility.recommendedJava,
+        },
+        removedJvmArgs: removed.map((r) => ({ argument: r.argument, minJava: r.minJava, reason: r.reason })),
+        profile,
       };
     }
 
@@ -314,7 +393,16 @@ export class LaunchService {
     // instead of leaving it permanently stuck in "starting".
     let proc: Awaited<ReturnType<MinecraftProcessManager["start"]>>;
     try {
-      proc = await this.processes.start({ sessionId, instanceId: instance.id, command });
+      proc = await this.processes.start({
+        sessionId,
+        instanceId: instance.id,
+        command,
+        meta: {
+          loader: instance.loader,
+          minecraftVersion: instance.minecraftVersion,
+          javaMajor: runtime.majorVersion,
+        },
+      });
     } catch (err) {
       try {
         await this.db.client.launchSession.update({
@@ -340,7 +428,19 @@ export class LaunchService {
       ...(proc.pid !== null ? { pid: proc.pid } : {}),
       command: { javaPath: command.javaPath, args: command.args, cwd: command.cwd },
       preflight: report,
+      compatibility: {
+        minecraftVersion: instance.minecraftVersion,
+        requiredJava: requiredMajor,
+        selectedJava: runtime.majorVersion,
+        compatible: javaCompatibility.compatible,
+        minJava: javaCompatibility.minJava,
+        recommendedJava: javaCompatibility.recommendedJava,
+      },
+      removedJvmArgs: removed.map((r) => ({ argument: r.argument, minJava: r.minJava, reason: r.reason })),
     };
+    } finally {
+      releaseLaunch();
+    }
   }
 
   async stop(instanceId: string): Promise<boolean> {
@@ -362,6 +462,9 @@ export class LaunchService {
       startedAtMs: p.startedAtMs,
       endedAtMs: p.endedAtMs,
       exitCode: p.exitCode,
+      crashReason: p.crashReason,
+      diagnosis: p.diagnosis,
+      crashReportPath: p.crashReportPath,
     }));
   }
 

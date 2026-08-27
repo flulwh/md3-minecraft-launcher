@@ -26,10 +26,16 @@ import { LaunchService } from "./services/launch-service.js";
 import { RepairService } from "./services/repair-service.js";
 import { InstallationManager } from "./installation/manager.js";
 import { SettingsService } from "./services/settings-service.js";
+import { BackupManager } from "./instance/BackupManager.js";
+import { DuplicateManager } from "./instance/DuplicateManager.js";
+import { ExportManager } from "./instance/ExportManager.js";
+import { ImportManager } from "./instance/ImportManager.js";
 import { ContentManager } from "./core/content/content-service.js";
 import { AutoDependencyService } from "./core/content/auto-dependency.js";
 import { MarketService } from "./core/market/market-service.js";
 import { WebSocketManager } from "./websocket/manager.js";
+import { LogBuffer, rootLogBuffer } from "./core/log/log-buffer.js";
+import { HealthChecker } from "./instance/HealthChecker.js";
 
 /**
  * Composition root. Manual DI keeps the dependency graph explicit:
@@ -43,6 +49,7 @@ export class AppContainer {
   readonly cachedFetcher: CachedFetcher;
   readonly db: Database;
   readonly ws: WebSocketManager;
+  readonly logs: LogBuffer;
 
   readonly manifests: VersionManifestService;
   readonly versionStore: VersionMetadataStore;
@@ -67,6 +74,11 @@ export class AppContainer {
   readonly repair: RepairService;
   readonly installs: InstallationManager;
   readonly settings: SettingsService;
+  readonly backups: BackupManager;
+  readonly duplicates: DuplicateManager;
+  readonly exports: ExportManager;
+  readonly imports: ImportManager;
+  readonly health: HealthChecker;
   readonly content: ContentManager;
   readonly market: MarketService;
   readonly autoDeps: AutoDependencyService;
@@ -74,6 +86,7 @@ export class AppContainer {
   constructor(config: AppConfig) {
     this.config = config;
     this.logger = createLogger(config);
+    this.logs = rootLogBuffer;
     this.bus = new EventBus();
     this.http = new HttpClient(config);
     this.cachedFetcher = createCachedFetcher(this.http, config);
@@ -182,6 +195,41 @@ export class AppContainer {
     // --- market (search / detail / versions, cached against upstream rate limits)
     this.market = new MarketService(this.http, config, this.logger.child({ module: "market" }));
 
+    // --- instance backup / restore (needs instances for idle guards)
+    this.backups = new BackupManager(
+      config,
+      this.db,
+      this.bus,
+      this.instances,
+      this.logger.child({ module: "backups" }),
+    );
+
+    // --- instance duplicate / export / import (file-transfer domain)
+    this.duplicates = new DuplicateManager(
+      config,
+      this.instances,
+      this.bus,
+      this.logger.child({ module: "duplicates" }),
+    );
+    this.exports = new ExportManager(config, this.instances, this.logger.child({ module: "exports" }));
+    this.imports = new ImportManager(
+      config,
+      this.instances,
+      this.bus,
+      this.logger.child({ module: "imports" }),
+    );
+
+    // --- instance health / deletion summary (read-only reporting)
+    this.health = new HealthChecker(
+      config,
+      this.db,
+      this.instances,
+      this.versions,
+      this.downloads,
+      this.loaders,
+      this.logger.child({ module: "health" }),
+    );
+
     // --- instance content (mods / resource packs / shader packs) + market install
     this.content = new ContentManager(
       config,
@@ -214,6 +262,10 @@ export class AppContainer {
       this.bus,
       this.logger.child({ module: "installation" }),
     );
+
+    // Wire runtime guards so InstanceService.delete() can refuse to wipe a
+    // directory while an install session or live process still exists (#2).
+    this.instances.setRuntimeGuards(this.installs, this.processes);
 
     this.ws = new WebSocketManager(this.bus, this.logger.child({ module: "ws" }));
   }

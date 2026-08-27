@@ -24,6 +24,7 @@ import { toast } from "../stores/toastStore";
 import { uiStore, type ThemeMode } from "../stores/uiStore";
 import { APP_VERSION } from "../theme/tokens";
 import type { SettingsPayload } from "../api/types";
+import { SystemLogPanel } from "../components/SystemLogPanel";
 
 const SECTIONS = [
   { key: "general", icon: "settings", label: "常规" },
@@ -31,6 +32,7 @@ const SECTIONS = [
   { key: "java", icon: "coffee", label: "Java" },
   { key: "downloads", icon: "download", label: "下载" },
   { key: "advanced", icon: "code", label: "高级" },
+  { key: "logs", icon: "article", label: "日志" },
 ] as const;
 
 type SectionKey = (typeof SECTIONS)[number]["key"];
@@ -204,6 +206,8 @@ export function SettingsPage() {
               />
             </FormRow>
           </Section>
+
+          <LogSection />
         </Stack>
       </Box>
 
@@ -426,6 +430,14 @@ function JavaSection() {
           ))}
         </Box>
       )}
+    </Section>
+  );
+}
+
+function LogSection() {
+  return (
+    <Section id="sec-logs" icon="article" title="客户端日志">
+      <SystemLogPanel />
     </Section>
   );
 }

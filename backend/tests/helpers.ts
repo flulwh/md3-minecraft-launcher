@@ -28,6 +28,8 @@ export function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     assetObjectsDir: os.tmpdir(),
     runtimesDir: os.tmpdir(),
     logsDir: os.tmpdir(),
+    backupsDir: os.tmpdir(),
+    exportsDir: os.tmpdir(),
     ...overrides,
   };
 }
