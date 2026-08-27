@@ -1,3 +1,5 @@
+import path from "node:path";
+
 export type ErrorCode =
   | "INTERNAL_ERROR"
   | "VALIDATION_ERROR"
@@ -16,6 +18,11 @@ export type ErrorCode =
   | "AUTH_FAILED"
   | "AUTH_PENDING"
   | "LOADER_INSTALL_FAILED"
+  | "LOADER_NOT_INSTALLED"
+  | "FORGE_PATCH_FAILED"
+  | "INSTALL_IN_PROGRESS"
+  | "INSTALL_CANCELLED"
+  | "INSTALLATION_CORRUPTED"
   | "PATH_ESCAPES_SANDBOX"
   | "OFFLINE_UNAVAILABLE"
   | "PROVIDER_NOT_CONFIGURED";
@@ -114,5 +121,20 @@ export class PreflightError extends AppError {
 export class SandboxViolationError extends AppError {
   constructor(target: string) {
     super("PATH_ESCAPES_SANDBOX", `Refusing to access path outside sandbox: ${target}`, 400);
+  }
+}
+
+export class IntegrityVerificationError extends AppError {
+  constructor(issues: Array<{ path: string; reason: string }>) {
+    const sample = issues
+      .slice(0, 3)
+      .map((i) => ` ${path.basename(i.path)} (${i.reason})`)
+      .join(",");
+    super(
+      "INSTALLATION_CORRUPTED",
+      `安装完整性校验未通过：${issues.length} 个文件缺失或为空${sample ? `：${sample}` : ""}`,
+      500,
+      { issues },
+    );
   }
 }

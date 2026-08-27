@@ -78,6 +78,15 @@ export function InstanceCard({ instance, lastPlayedAt, onEdit }: InstanceCardPro
 
         <Box sx={{ display: "flex", alignItems: "center", gap: 0.75, flexWrap: "wrap" }}>
           <LoaderChip loader={instance.loader} version={null} />
+          {instance.status === "BROKEN" && (
+            <Chip size="small" color="error" label="需修复" />
+          )}
+          {instance.status === "CREATED" && (
+            <Chip size="small" color="warning" label="未安装" />
+          )}
+          {instance.status === "INSTALLING" && (
+            <Chip size="small" color="info" label="安装中" />
+          )}
           {runningLike ? (
             <Chip
               size="small"

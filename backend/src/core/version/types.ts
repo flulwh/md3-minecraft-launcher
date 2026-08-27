@@ -140,6 +140,12 @@ export interface ResolvedLibraryArtifact {
   sha1?: string;
   size?: number;
   urls: string[];
+  /**
+   * True when this artifact is produced locally by a loader installer /
+   * binary patcher (Forge/NeoForge client jar) and has no download URL. It is
+   * still on the classpath, but must already exist and pass preflight checks.
+   */
+  producedLocally?: boolean;
 }
 
 export interface ResolvedLibrary {

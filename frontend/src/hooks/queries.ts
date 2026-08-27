@@ -98,6 +98,33 @@ export function useRepairInstance(id: string) {
   });
 }
 
+// ---- V2.0 install engine ----
+
+export function useInstall() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => instancesApi.install(id),
+    onSuccess: (_data, id) => {
+      void qc.invalidateQueries({ queryKey: qk.instances });
+      void qc.invalidateQueries({ queryKey: qk.instance(id) });
+    },
+  });
+}
+
+export function useInstallControl() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, action }: { id: string; action: "pause" | "resume" | "cancel" }): Promise<unknown> => {
+      if (action === "pause") return instancesApi.installPause(id);
+      if (action === "resume") return instancesApi.installResume(id);
+      return instancesApi.installCancel(id);
+    },
+    onSettled: (_data, _error, vars) => {
+      void qc.invalidateQueries({ queryKey: qk.instance(vars.id) });
+    },
+  });
+}
+
 export function useAccounts() {
   return useQuery({ queryKey: qk.accounts, queryFn: () => accountsApi.list() });
 }

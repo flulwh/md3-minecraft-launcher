@@ -24,6 +24,7 @@ import { JavaService } from "./services/java-service.js";
 import { InstanceService } from "./services/instance-service.js";
 import { LaunchService } from "./services/launch-service.js";
 import { RepairService } from "./services/repair-service.js";
+import { InstallationManager } from "./installation/manager.js";
 import { SettingsService } from "./services/settings-service.js";
 import { ContentManager } from "./core/content/content-service.js";
 import { AutoDependencyService } from "./core/content/auto-dependency.js";
@@ -64,6 +65,7 @@ export class AppContainer {
   readonly launch: LaunchService;
   readonly loaders: LoaderRegistry;
   readonly repair: RepairService;
+  readonly installs: InstallationManager;
   readonly settings: SettingsService;
   readonly content: ContentManager;
   readonly market: MarketService;
@@ -197,6 +199,20 @@ export class AppContainer {
       this.market,
       this.content,
       this.logger.child({ module: "auto-deps" }),
+    );
+
+    // --- installation engine (state machine + plan + orchestration)
+    this.installs = new InstallationManager(
+      config,
+      this.versions,
+      this.downloads,
+      this.assets,
+      this.loaders,
+      this.instances,
+      this.autoDeps,
+      this.downloadManager,
+      this.bus,
+      this.logger.child({ module: "installation" }),
     );
 
     this.ws = new WebSocketManager(this.bus, this.logger.child({ module: "ws" }));

@@ -40,6 +40,9 @@ export interface InstanceDto {
   fullscreen: boolean;
   serverIp: string | null;
   gameDir: string;
+  status: string;
+  installedAt: string | null;
+  lastError: string | null;
   createdAt: string;
 }
 
@@ -286,6 +289,7 @@ export const Events = {
   CONTENT_CHANGED: "content.changed",
   JAVA_SCAN_DONE: "java.scan.done",
   PROVISIONING_FAILED: "provisioning.failed",
+  INSTALL: "install.progress",
 } as const;
 
 export interface MinecraftLogData {
@@ -308,6 +312,81 @@ export interface RepairProgressData {
   stage: string;
   current: number;
   total: number;
+}
+
+// ---- instance installation (V2.0 install engine) ----
+
+export type InstallPhase =
+  | "CREATED"
+  | "ANALYZING"
+  | "PLANNING"
+  | "PREPARING"
+  | "DOWNLOADING"
+  | "INSTALLING"
+  | "FINALIZING"
+  | "READY"
+  | "PAUSED"
+  | "RETRYING"
+  | "CANCELLING"
+  | "CANCELLED"
+  | "FAILED";
+
+export type InstanceStatus =
+  | "CREATED"
+  | "INSTALLING"
+  | "READY"
+  | "BROKEN"
+  | "UPDATING"
+  | "UNINSTALLING"
+  | "DELETED";
+
+export interface InstallationSnapshot {
+  instanceId: string;
+  phase: InstallPhase;
+  instanceStatus: InstanceStatus;
+  progressPct: number;
+  downloadedBytes: number;
+  totalBytes: number;
+  speedBps: number;
+  etaSec: number | null;
+  tasksDone: number;
+  tasksTotal: number;
+  error?: string;
+  message?: string;
+  updatedAt: number;
+}
+
+export type InstallationTaskKind =
+  | "VERSION_JSON"
+  | "CLIENT"
+  | "LIBRARY"
+  | "NATIVE"
+  | "ASSET_INDEX"
+  | "ASSET"
+  | "LOADER";
+
+export interface InstallationTask {
+  id: string;
+  kind: InstallationTaskKind;
+  name: string;
+  path: string;
+  size: number;
+  sha1: string | null;
+  cached: boolean;
+  priority: number;
+}
+
+export interface InstallationPlan {
+  instanceId: string;
+  minecraft: string;
+  loader?: string | null;
+  versionId: string;
+  files: number;
+  pendingFiles: number;
+  totalBytes: number;
+  cachedBytes: number;
+  downloadBytes: number;
+  tasks: InstallationTask[];
 }
 
 // ---- market ----

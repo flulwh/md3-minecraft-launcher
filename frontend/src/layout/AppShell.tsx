@@ -8,6 +8,7 @@ import { Sidebar } from "./Sidebar";
 import { StatusBar } from "./StatusBar";
 import { TitleBar } from "./TitleBar";
 import { downloadStore } from "../stores/downloadStore";
+import { installStore } from "../stores/installStore";
 import { launchStore } from "../stores/launchStore";
 import { logStore } from "../stores/logStore";
 import { repairStore } from "../stores/repairStore";
@@ -59,6 +60,23 @@ function dispatchWsEvent(env: EventEnvelope, qc: ReturnType<typeof useQueryClien
     case "repair.progress":
       repairStore.getState().update(env.data as import("../api/types").RepairProgressData);
       break;
+    case "install.progress": {
+      const snap = env.data as import("../api/types").InstallationSnapshot;
+      installStore.getState().update(snap);
+      if (["READY", "FAILED", "CANCELLED"].includes(snap.phase)) {
+        // Terminal: drop the live panel so a stale message/control doesn't linger.
+        installStore.getState().clear(snap.instanceId);
+        void qc.invalidateQueries({ queryKey: qk.instances });
+        void qc.invalidateQueries({ queryKey: qk.instance(snap.instanceId) });
+      }
+      if (snap.phase === "FAILED") {
+        toastStore.getState().push(`${snap.instanceId.slice(0, 8)}… 安装失败：${snap.error ?? "未知错误"}`, "error");
+      }
+      if (snap.phase === "READY") {
+        toastStore.getState().push(`${snap.instanceId.slice(0, 8)}… 安装完成`, "success");
+      }
+      break;
+    }
     case "minecraft.starting": {
       const d = env.data as { pid: number | null; sessionId: string };
       launchStore.getState().onStarting(env.instanceId ?? "", d.sessionId, d.pid);

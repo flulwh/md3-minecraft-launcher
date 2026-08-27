@@ -44,6 +44,9 @@ export interface InstanceDto {
   fullscreen: boolean;
   serverIp: string | null;
   gameDir: string;
+  status: string;
+  installedAt: string | null;
+  lastError: string | null;
   createdAt: string;
 }
 
@@ -168,6 +171,9 @@ export class InstanceService {
     height: number | null;
     fullscreen: boolean;
     serverIp: string | null;
+    status: string;
+    installedAt: Date | null;
+    lastError: string | null;
     createdAt: Date;
   }): InstanceDto {
     return {
@@ -186,8 +192,27 @@ export class InstanceService {
       fullscreen: row.fullscreen,
       serverIp: row.serverIp,
       gameDir: this.gameDirectory(row.id),
+      status: row.status,
+      installedAt: row.installedAt ? row.installedAt.toISOString() : null,
+      lastError: row.lastError,
       createdAt: row.createdAt.toISOString(),
     };
+  }
+
+  /**
+   * Updates the instance-level install lifecycle status. Only `status` is
+   * changed unless an options bag explicitly provides timestamps/errors.
+   */
+  async setStatus(
+    id: string,
+    status: string,
+    opts?: { installedAt?: Date; lastError?: string | null },
+  ): Promise<void> {
+    const data: { status: string; installedAt?: Date; lastError?: string | null } = { status };
+    if (opts?.installedAt !== undefined) data.installedAt = opts.installedAt;
+    if (opts !== undefined && "lastError" in opts) data.lastError = opts.lastError;
+    await this.db.client.instance.update({ where: { id }, data });
+    this.bus.publish(Events.INSTANCE_UPDATED, { id, action: "status", status }, id);
   }
 }
 

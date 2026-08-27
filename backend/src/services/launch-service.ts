@@ -16,7 +16,7 @@ import { ClasspathBuilder } from "../core/classpath/classpath-builder.js";
 import { GameArgumentResolver } from "../core/arguments/game-argument-resolver.js";
 import { JvmArgumentResolver } from "../core/arguments/jvm-argument-resolver.js";
 import { VariableMap } from "../core/arguments/variable-substitution.js";
-import { PreflightChecker, PreflightResult } from "../core/preflight/preflight-checker.js";
+import { PreflightChecker, PreflightResult, ReportBuilder } from "../core/preflight/preflight-checker.js";
 import { LibraryResolver } from "../core/libraries/library-resolver.js";
 import { LoaderRegistry } from "../core/loaders/loader-registry.js";
 import { currentRuntime } from "../utils/runtime-env.js";
@@ -28,6 +28,12 @@ export interface LaunchOptions {
   dryRun?: boolean;
   skipPreflight?: boolean;
 }
+
+/** Marker resource Forge/NeoForge's patched client jar must contain. */
+const FORGE_PATCH_MARKER = ".forge_patched_minecraft";
+
+/** Loader ids whose version profile carries a binary-patched client jar. */
+const BINARY_PATCH_LOADERS = new Set(["forge", "neoforge"]);
 
 export interface LaunchResult {
   sessionId: string | null;
@@ -158,6 +164,17 @@ export class LaunchService {
       });
     }
 
+    // ---- Loader installation verification (binary-patched client marker)
+    if (BINARY_PATCH_LOADERS.has(instance.loader)) {
+      await this.verifyLoaderInstallation(provisioned.classpathLibraries, preflight);
+    }
+
+    // ---- Classpath integrity: every rule-approved library + client must exist
+    preflight.pathsExist(
+      "Classpath entries",
+      [...provisioned.classpathLibraries.map((l) => l.artifact.file), provisioned.clientJar],
+    );
+
     // ---- Authentication token (after downloads so UI sees progress early)
     const mcToken = await this.auth.getValidMcToken(account.id);
     preflight.add("Authentication", true, `${mcToken.name}`);
@@ -176,6 +193,18 @@ export class LaunchService {
     });
     const classpathBuilder = new ClasspathBuilder(this.config.librariesDir);
     const cp = classpathBuilder.build(provisioned.classpathLibraries, provisioned.clientJar, env.os);
+
+    this.logger.info({
+      loader: instance.loader,
+      loaderVersion: instance.loaderVersion,
+      minecraft: instance.minecraftVersion,
+      resolvedVersion: resolved.id,
+      "launch.clientJar": provisioned.clientJar,
+      "launch.classpathEntries": cp.entries.length,
+      "launch.libraries": provisioned.classpathLibraries.length,
+      "launch.natives": provisioned.nativeLibraries.length,
+      mainClass: resolved.mainClass,
+    }, "[Launch] forged launch summary");
 
     // ---- Variables
     const vars = this.buildVariables({
@@ -352,6 +381,35 @@ export class LaunchService {
       exitCode: r.exitCode,
       crashReason: r.crashReason,
     }));
+  }
+
+  /**
+   * Verifies a binary-patched loader's client jar is present AND actually
+   * contains the `.forge_patched_minecraft` marker inside it. Files that only
+   * "look" installed are rejected here rather than crashing at Forge boot.
+   */
+  private async verifyLoaderInstallation(
+    libraries: import("../core/version/types.js").ResolvedLibrary[],
+    preflight: ReportBuilder,
+  ): Promise<void> {
+    const localClients = libraries.filter(
+      (l) => l.artifact.producedLocally === true && l.artifact.urls.length === 0,
+    );
+    const client =
+      localClients.find(
+        (l) => /^net\.(minecraftforge|neoforged)/.test(l.name) && /:client$/.test(l.name),
+      ) ??
+      localClients.find((l) => /(^|[\\/:])[^\\/:]*client[^\\/:]*\.jar$/i.test(l.artifact.file)) ??
+      localClients[0];
+    if (!client) {
+      preflight.add(
+        "Loader patched client",
+        true,
+        "no locally-produced client artifact in classpath",
+      );
+      return;
+    }
+    await preflight.jarMarker("Loader patched client", client.artifact.file, FORGE_PATCH_MARKER);
   }
 
   /**

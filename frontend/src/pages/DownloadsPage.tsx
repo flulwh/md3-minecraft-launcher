@@ -1,17 +1,22 @@
 import Box from "@mui/material/Box";
+import Button from "@mui/material/Button";
 import Card from "@mui/material/Card";
 import Chip from "@mui/material/Chip";
 import InputBase from "@mui/material/InputBase";
+import LinearProgress from "@mui/material/LinearProgress";
 import Paper from "@mui/material/Paper";
 import Skeleton from "@mui/material/Skeleton";
 import Typography from "@mui/material/Typography";
 import { useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { AppIcon } from "../design-system/AppIcon";
 import { PageHeader } from "../design-system/PageHeader";
 import { StateView } from "../design-system/StateView";
 import { DownloadTaskRow } from "../components/DownloadTaskRow";
-import { useDownloads } from "../hooks/queries";
-import { fmtSpeed } from "../lib/format";
+import { installStore } from "../stores/installStore";
+import { useDownloads, useInstances } from "../hooks/queries";
+import { fmtBytes, fmtSpeed } from "../lib/format";
+import type { InstallationSnapshot, InstanceDto, InstallPhase } from "../api/types";
 
 type StatusFilter = "all" | "downloading" | "paused" | "completed" | "failed";
 
@@ -25,6 +30,9 @@ const FILTERS: Array<{ key: StatusFilter; label: string }> = [
 
 export function DownloadsPage() {
   const downloads = useDownloads();
+  const instances = useInstances();
+  const navigate = useNavigate();
+  const installs = installStore((s) => s.active);
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("downloading");
 
@@ -67,6 +75,8 @@ export function DownloadsPage() {
         <StatCard icon="check_circle" label="已完成" value={String(stats?.completedTotal ?? 0)} />
         <StatCard icon="error" label="失败" value={String(stats?.failedTotal ?? 0)} />
       </Box>
+
+      <ActiveInstalls installs={installs} instances={instances.data ?? []} navigate={navigate} />
 
       <Paper sx={{ display: "flex", alignItems: "center", gap: 1.5, p: 1, pl: 1.5, mb: 2, flexWrap: "wrap", bgcolor: "surfaceContainerLow" }}>
         <AppIcon name="search" size={20} />
@@ -157,6 +167,104 @@ function StatCard({ icon, label, value }: { icon: string; label: string; value: 
           {value}
         </Typography>
       </Box>
+    </Card>
+  );
+}
+
+const LIVE_PHASES: InstallPhase[] = [
+  "CREATED",
+  "ANALYZING",
+  "PLANNING",
+  "PREPARING",
+  "DOWNLOADING",
+  "INSTALLING",
+  "FINALIZING",
+  "PAUSED",
+  "RETRYING",
+  "CANCELLING",
+];
+
+const INSTALL_PHASE_LABEL: Record<string, string> = {
+  ANALYZING: "分析版本",
+  PLANNING: "生成计划",
+  PREPARING: "准备加载器",
+  DOWNLOADING: "下载中",
+  INSTALLING: "安装中",
+  FINALIZING: "收尾",
+  PAUSED: "已暂停",
+  RETRYING: "重试中",
+  CANCELLING: "取消中",
+};
+
+/** "下载中心" 正在安装的实例（聚合 install.progress 事件） */
+function ActiveInstalls({
+  installs,
+  instances,
+  navigate,
+}: {
+  installs: Record<string, InstallationSnapshot>;
+  instances: InstanceDto[];
+  navigate: (to: string) => void;
+}) {
+  const live = Object.values(installs).filter((s) => LIVE_PHASES.includes(s.phase));
+  if (live.length === 0) return null;
+
+  return (
+    <Card sx={{ mb: 2.5, overflow: "hidden" }}>
+      <Box sx={{ px: 2.5, pt: 2 }}>
+        <Typography variant="subtitle2" sx={{ fontWeight: 600, display: "flex", alignItems: "center", gap: 1 }}>
+          <AppIcon name="download" size={18} />
+          正在安装的实例
+        </Typography>
+      </Box>
+      {live.map((s) => {
+        const inst = instances.find((i) => i.id === s.instanceId);
+        const phase = s.phase === "DOWNLOADING" ? "download" : "other";
+        return (
+          <Box
+            key={s.instanceId}
+            sx={{ px: 2.5, py: 2, borderTop: 1, borderColor: "divider" }}
+          >
+            <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, mb: 1 }}>
+              <Box sx={{ flex: 1, minWidth: 0 }}>
+                <Typography variant="body2" sx={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {inst?.name ?? "实例"}
+                  <Box component="span" sx={{ color: "text.secondary", fontWeight: 400 }}>
+                    {" "}
+                    {inst ? `· ${inst.minecraftVersion}${inst.loader !== "vanilla" ? ` · ${inst.loader}` : ""}` : ""}
+                  </Box>
+                </Typography>
+              </Box>
+              <Chip size="small" label={INSTALL_PHASE_LABEL[s.phase] ?? s.phase} color={s.phase === "PAUSED" ? "warning" : s.phase === "CANCELLING" ? "default" : "info"} />
+            </Box>
+            {phase === "download" ? (
+              <LinearProgress variant="determinate" value={s.progressPct} sx={{ mb: 1 }} />
+            ) : (
+              <LinearProgress variant="indeterminate" sx={{ mb: 1 }} />
+            )}
+            {s.message ? (
+              <Typography variant="caption" sx={{ color: "text.secondary", display: "block", mb: 0.5 }}>
+                {s.message}
+              </Typography>
+            ) : null}
+            <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 1, flexWrap: "wrap" }}>
+              <Typography variant="caption" sx={{ color: "text.secondary" }}>
+                {fmtBytes(s.downloadedBytes)} / {fmtBytes(s.totalBytes)}
+              </Typography>
+              <Box sx={{ display: "flex", alignItems: "center", gap: 1.5 }}>
+                {s.speedBps > 0 && (
+                  <Typography variant="caption" sx={{ color: "text.secondary" }}>
+                    {fmtSpeed(s.speedBps)}
+                  </Typography>
+                )}
+                <Button size="small" onClick={() => navigate(`/instances/${s.instanceId}`)}>
+                  查看详情
+                </Button>
+              </Box>
+            </Box>
+          </Box>
+        );
+      })}
     </Card>
   );
 }

@@ -18,6 +18,14 @@ import {
 
 const INSTALL_TIMEOUT_MS = 10 * 60_000;
 
+/**
+ * Marker entry that Forge/NeoForge's binary-patcher writes into the client jar
+ * when invoked with `--marker`. Forge's `CommonLaunchHandler.getPathFromResource`
+ * looks it up inside the SecureModuleClassLoader, so its presence is what makes
+ * a patched client legitimate. An on-disk file alone is NOT sufficient.
+ */
+const FORGE_PATCH_MARKER = ".forge_patched_minecraft";
+
 function runInstaller(javaPath: string, installerJar: string, installDir: string): Promise<void> {
   return new Promise((resolve, reject) => {
     execFile(
@@ -67,6 +75,18 @@ function mergeDirInto(dstDir: string, srcDir: string): void {
       fs.mkdirSync(path.dirname(dst), { recursive: true });
       fs.copyFileSync(src, dst);
     }
+  }
+}
+
+/** Reports whether a (zip/jar) file contains the named entry. */
+async function zipContainsEntry(zipPath: string, entryName: string): Promise<boolean> {
+  try {
+    const { readFileSync } = await import("node:fs");
+    const AdmZip = (await import("adm-zip")).default;
+    const zip = new AdmZip(readFileSync(zipPath));
+    return zip.getEntry(entryName) !== null;
+  } catch {
+    return false;
   }
 }
 
@@ -447,7 +467,7 @@ abstract class InstallerAdapter implements ModLoaderAdapter {
       "--unpatched",
       "--store",
       "--marker",
-      ".forge_patched_minecraft",
+      FORGE_PATCH_MARKER,
     ];
     fs.mkdirSync(path.dirname(output), { recursive: true });
     this.logger.info(
@@ -468,7 +488,19 @@ abstract class InstallerAdapter implements ModLoaderAdapter {
         );
       }
     }
-    this.logger.info({ loader: this.id, output }, "loader client jar generated");
+    // The whole point of the patch: Forge's SecureModuleClassLoader must be able
+    // to find the marker resource inside this jar. Verify it now so we never
+    // record a "successful" install that cannot actually boot.
+    if (!(await zipContainsEntry(output, FORGE_PATCH_MARKER))) {
+      throw new AppError(
+        "FORGE_PATCH_FAILED",
+        `Loader client patch produced no '${FORGE_PATCH_MARKER}' marker inside the jar`,
+      );
+    }
+    this.logger.info(
+      { loader: this.id, output },
+      `loader client jar generated (marker '${FORGE_PATCH_MARKER}' present)`,
+    );
   }
 
   /** Picks an installed Java runtime capable of running loader tooling. */

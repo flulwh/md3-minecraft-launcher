@@ -53,6 +53,10 @@ model Instance {
   height           Int?
   fullscreen       Boolean         @default(false)
   serverIp         String?
+  /// install lifecycle status: CREATED | INSTALLING | READY | BROKEN | UPDATING | UNINSTALLING | DELETED
+  status           String          @default("CREATED")
+  installedAt      DateTime?
+  lastError        String?
   createdAt        DateTime        @default(now())
   updatedAt        DateTime        @updatedAt
   sessions         LaunchSession[]

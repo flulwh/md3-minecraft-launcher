@@ -25,6 +25,7 @@ import { StateView } from "../design-system/StateView";
 import { LogViewer } from "../components/LogViewer";
 import { LaunchButton } from "../components/LaunchButton";
 import { ContentListPanel } from "../components/ContentListPanel";
+import { InstallProgressPanel } from "../components/InstallProgressPanel";
 import { wsClient } from "../ws/wsClient";
 import {
   useDeleteInstance,
@@ -239,7 +240,9 @@ function OverviewTab({ instanceId }: { instanceId: string }) {
   void instanceId;
   return (
     <Card sx={{ p: 2.5 }}>
-      {preflight && preflight.length > 0 && (
+      <InstallProgressPanel instanceId={instanceId} />
+      <Box sx={{ mt: 2.5 }}>
+        {preflight && preflight.length > 0 && (
         <>
           <Typography variant="subtitle2" sx={{ mb: 1 }}>
             最近预检结果
@@ -304,6 +307,7 @@ function OverviewTab({ instanceId }: { instanceId: string }) {
         <FormRow label="创建时间">
           <Typography variant="body2">{fmtDateTime(inst.createdAt)}</Typography>
         </FormRow>
+      </Box>
       </Box>
     </Card>
   );

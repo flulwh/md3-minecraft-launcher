@@ -14,16 +14,60 @@ export async function instanceRoutes(app: FastifyInstance, c: AppContainer): Pro
   app.post("/api/v1/instances", async (req, reply) => {
     const body = parseBody(createInstanceSchema, req.body);
     const instance = await c.instances.create(body);
-    // Background provisioning: install the loader (if any) then download the
-    // version's client jar, libraries, natives and assets right after creation.
-    void provisionNewInstance(c, instance).catch((err) => {
-      c.logger.warn({ instanceId: instance.id, err }, "instance provisioning failed");
-      c.bus.publish(Events.PROVISIONING_FAILED, {
-        instanceId: instance.id,
-        error: err instanceof Error ? err.message : String(err),
-      }, instance.id);
-    });
+    // Background install: state machine drives analyze -> plan -> prepare (loader)
+    // -> download -> install (auto deps) -> finalize -> READY.
+    try {
+      c.installs.start(instance.id);
+    } catch (err) {
+      c.logger.warn({ instanceId: instance.id, err }, "install start failed");
+      c.bus.publish(
+        Events.PROVISIONING_FAILED,
+        { instanceId: instance.id, error: err instanceof Error ? err.message : String(err) },
+        instance.id,
+      );
+    }
     return ok(reply, instance, 201);
+  });
+
+  /** POST /api/v1/instances/:id/plan — builds an install plan (no downloads). */
+  app.post("/api/v1/instances/:id/plan", async (req, reply) => {
+    const params = parseBody(idParamSchema as unknown as z.ZodType<{ id: string }>, req.params);
+    const instance = await c.instances.get(params.id);
+    return ok(reply, await c.installs.plan(instance));
+  });
+
+  /** GET /api/v1/instances/:id/install — current install snapshot (or null). */
+  app.get("/api/v1/instances/:id/install", async (req, reply) => {
+    const params = parseBody(idParamSchema as unknown as z.ZodType<{ id: string }>, req.params);
+    return ok(reply, c.installs.snapshot(params.id));
+  });
+
+  /** POST /api/v1/instances/:id/install — start (or restart) the install. */
+  app.post("/api/v1/instances/:id/install", async (req, reply) => {
+    const params = parseBody(idParamSchema as unknown as z.ZodType<{ id: string }>, req.params);
+    c.installs.start(params.id);
+    return ok(reply, { started: true });
+  });
+
+  /** POST /api/v1/instances/:id/install/pause */
+  app.post("/api/v1/instances/:id/install/pause", async (req, reply) => {
+    const params = parseBody(idParamSchema as unknown as z.ZodType<{ id: string }>, req.params);
+    c.installs.pause(params.id);
+    return ok(reply, { paused: true });
+  });
+
+  /** POST /api/v1/instances/:id/install/resume */
+  app.post("/api/v1/instances/:id/install/resume", async (req, reply) => {
+    const params = parseBody(idParamSchema as unknown as z.ZodType<{ id: string }>, req.params);
+    c.installs.resume(params.id);
+    return ok(reply, { resumed: true });
+  });
+
+  /** POST /api/v1/instances/:id/install/cancel */
+  app.post("/api/v1/instances/:id/install/cancel", async (req, reply) => {
+    const params = parseBody(idParamSchema as unknown as z.ZodType<{ id: string }>, req.params);
+    c.installs.cancel(params.id);
+    return ok(reply, { cancelled: true });
   });
 
   app.get("/api/v1/instances/:id", async (req, reply) => {
@@ -53,24 +97,4 @@ export async function instanceRoutes(app: FastifyInstance, c: AppContainer): Pro
     );
     return ok(reply, report);
   });
-}
-
-/**
- * Installs the instance's loader (when present) and provisions all game files
- * for a freshly created instance. Runs in the background so the create request
- * can return immediately; files are downloaded by RepairService which reuses the
- * same idempotent download pipeline as launch.
- */
-async function provisionNewInstance(
-  c: AppContainer,
-  instance: { id: string; minecraftVersion: string; loader: string; loaderVersion: string | null },
-): Promise<void> {
-  if (instance.loader !== "vanilla" && instance.loaderVersion) {
-    const adapter = c.loaders.get(instance.loader);
-    if (adapter) {
-      await adapter.install(instance.minecraftVersion, instance.loaderVersion);
-    }
-  }
-  await c.repair.repair(instance.id);
-  await c.autoDeps.installForInstance(instance.id, instance.minecraftVersion, instance.loader);
 }

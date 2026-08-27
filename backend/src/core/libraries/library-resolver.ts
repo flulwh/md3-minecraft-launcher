@@ -66,17 +66,22 @@ export class LibraryResolver {
     };
   }
 
-  private resolveArtifact(lib: Library): { file: string; sha1?: string; size?: number; urls: string[] } | null {
+  private resolveArtifact(
+    lib: Library,
+  ): { file: string; sha1?: string; size?: number; urls: string[]; producedLocally?: boolean } | null {
     const modern = lib.downloads?.artifact;
     if (modern) {
       const relPath = modern.path ?? this.pathFromName(lib.name);
       if (!relPath) return null;
+      const local = modern.url.length === 0;
       return {
         file: path.join(this.config.librariesDir, relPath),
         ...(modern.sha1 !== undefined ? { sha1: modern.sha1 } : {}),
         ...(modern.size !== undefined ? { size: modern.size } : {}),
-        // An empty url means the artifact is produced locally by a loader
-        // installer (e.g. Forge's client jar) and must not be downloaded.
+        // An empty url (e.g. Forge's client jar) means the artifact is produced
+        // locally by the loader installer and must not be downloaded — but it is
+        // still expected on disk and validated during preflight.
+        ...(local ? { producedLocally: true } : {}),
         urls: [modern.url].filter((u) => u.length > 0),
       };
     }
